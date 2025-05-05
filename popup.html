@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="popup.css">
+    <title>AI Prompt Manager</title>
+</head>
+<body>
+    <div id="app-container">
+
+        <!-- View 1: List of Prompts (Default View) -->
+        <div id="prompt-list-view">
+            <h2>My Prompts</h2>
+            <ul id="prompt-list">
+                <!-- Prompt list items will be dynamically added here -->
+                <!-- Example: <li>Prompt Title <span class="edit-icon">✏️</span><span class="delete-icon">🗑️</span></li> -->
+            </ul>
+            <button id="add-prompt-btn" title="Add New Prompt">+</button>
+        </div>
+
+        <!-- View 2: Input for Selected Prompt (Initially Hidden) -->
+        <div id="prompt-input-view" style="display: none;">
+            <h3>Selected Prompt: <span id="selected-prompt-title"></span></h3>
+            <textarea id="user-input" placeholder="Paste or type your text here..."></textarea>
+            <button id="copy-output-btn" disabled>Copy Output</button>
+            <button id="back-to-list-btn">Back</button>
+        </div>
+
+        <!-- View 3: Add/Edit Prompt Form (Initially Hidden) -->
+        <div id="add-edit-view" style="display: none;">
+            <h3 id="add-edit-title">Add New Prompt</h3>
+            <label for="prompt-title-input">Title:</label>
+            <input type="text" id="prompt-title-input" placeholder="E.g., Summarize Text">
+            <label for="prompt-text-input">System Prompt Text:</label>
+            <textarea id="prompt-text-input" placeholder="Enter the core instruction for the AI (e.g., You are a helpful assistant that summarizes text.)"></textarea>
+            <button id="save-prompt-btn">Save</button>
+            <button id="cancel-add-edit-btn">Cancel</button>
+        </div>
+
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

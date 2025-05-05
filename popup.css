@@ -1,0 +1,161 @@
+/* --- General Styles --- */
+body {
+    width: 400px; /* Fixed width for the popup */
+    min-height: 200px; /* Minimum height */
+    max-height: 550px; /* Prevent excessive height */
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    margin: 0; /* Remove default body margin */
+    padding: 15px;
+    font-size: 14px;
+    color: #333;
+    background-color: #f9f9f9;
+    box-sizing: border-box; /* Include padding and border in element's total width and height */
+}
+
+h2, h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #1a73e8; /* A slightly more engaging color */
+}
+
+button {
+    padding: 8px 15px;
+    margin: 5px 5px 5px 0; /* Add some space around buttons */
+    cursor: pointer;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #f1f1f1;
+    transition: background-color 0.2s ease;
+}
+
+button:hover {
+    background-color: #e0e0e0;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+textarea, input[type="text"] {
+    width: 100%; /* Make inputs/textareas fill their container width */
+    padding: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box; /* Include padding/border in width */
+    font-size: 14px;
+    font-family: inherit; /* Use the same font as the body */
+}
+
+textarea {
+    height: 100px; /* Default height for text areas */
+    resize: vertical; /* Allow vertical resizing */
+}
+
+label {
+    display: block; /* Make labels appear on their own line */
+    margin-bottom: 4px;
+    font-weight: bold;
+}
+
+/* --- App Container --- */
+#app-container {
+    /* Add specific styles if needed, padding is handled by body */
+}
+
+/* --- Prompt List View --- */
+#prompt-list-view h2 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#prompt-list {
+    list-style-type: none;
+    padding: 0;
+    margin: 0 0 15px 0; /* Space below the list */
+    max-height: 300px; /* Limit list height and enable scroll if needed */
+    overflow-y: auto; /* Add scrollbar if list is too long */
+}
+
+#prompt-list li {
+    padding: 10px;
+    margin-bottom: 5px;
+    background-color: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between; /* Push icons to the right */
+    align-items: center;
+    cursor: pointer; /* Indicate the whole item is clickable (for selection) */
+    transition: background-color 0.2s ease;
+}
+
+#prompt-list li:hover {
+    background-color: #f0f0f0;
+}
+
+#prompt-list li .prompt-title {
+     flex-grow: 1; /* Allow title to take available space */
+     margin-right: 10px; /* Space between title and icons */
+}
+
+#prompt-list li .action-icons span {
+    cursor: pointer;
+    margin-left: 8px; /* Space between icons */
+    font-size: 16px; /* Slightly larger icons */
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+}
+#prompt-list li .action-icons span:hover {
+     opacity: 1.0;
+}
+/* Placeholder styling for edit/delete icons - will be refined when icons are added */
+.edit-icon {
+    color: #5f6368; /* Example color */
+}
+
+.delete-icon {
+    color: #d93025; /* Example color */
+}
+
+#add-prompt-btn {
+    font-size: 20px; /* Make the '+' bigger */
+    padding: 5px 12px;
+    float: right; /* Position bottom-right of its container conceptually (though layout might affect exact spot) */
+    /* You might want more specific positioning later */
+}
+
+/* --- Prompt Input View --- */
+#prompt-input-view h3 {
+    margin-bottom: 10px;
+}
+#prompt-input-view #selected-prompt-title {
+    font-weight: bold;
+    color: #555;
+}
+
+#prompt-input-view textarea {
+    height: 150px; /* More space for user input */
+}
+
+#prompt-input-view button {
+    margin-top: 10px;
+}
+
+
+/* --- Add/Edit View --- */
+#add-edit-view {
+    /* No specific styles needed initially, relies on general element styles */
+}
+
+
+/* --- Hidden Views --- */
+/* Although set inline in HTML, you could also control this via CSS classes */
+/* Example:
+.hidden {
+    display: none;
+}
+*/
+/* We'll stick with inline for now as JS will toggle display directly */
