@@ -10,13 +10,14 @@ const STORAGE_KEY = 'userPrompts';
 async function getPrompts() {
     try {
         const result = await chrome.storage.sync.get([STORAGE_KEY]);
-        // If result.userPrompts exists and is an array, return it, otherwise return empty array
         return Array.isArray(result[STORAGE_KEY]) ? result[STORAGE_KEY] : [];
     } catch (error) {
         console.error("Error retrieving prompts:", error);
-        return []; // Return empty array on error
+        return [];
     }
 }
+// Make getPrompts accessible from console for debugging (optional)
+window.getPrompts = getPrompts;
 
 /**
  * Saves the provided array of prompts to chrome.storage.sync.
@@ -26,13 +27,14 @@ async function getPrompts() {
 async function savePrompts(promptsArray) {
     try {
         await chrome.storage.sync.set({ [STORAGE_KEY]: promptsArray });
-        console.log("Prompts saved successfully."); // Optional: for debugging
+        console.log("Prompts saved successfully.");
     } catch (error) {
         console.error("Error saving prompts:", error);
-        // Re-throw the error if you want calling functions to handle it
         throw error;
     }
 }
+// Make savePrompts accessible from console for debugging
+window.savePrompts = savePrompts;
 
 
 // --- Main Popup Logic ---
@@ -46,16 +48,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const promptInputView = document.getElementById('prompt-input-view');
     const addEditView = document.getElementById('add-edit-view');
 
-    // Get references to navigation/action buttons
+    // Get references to navigation/action buttons and interactive elements
     const addPromptBtn = document.getElementById('add-prompt-btn');
     const backToListBtn = document.getElementById('back-to-list-btn');
     const cancelAddEditBtn = document.getElementById('cancel-add-edit-btn');
-    const copyOutputBtn = document.getElementById('copy-output-btn'); // Added reference
-
-    // Get references to list and input view elements
+    const copyOutputBtn = document.getElementById('copy-output-btn');
     const promptListUl = document.getElementById('prompt-list');
-    const selectedPromptTitleSpan = document.getElementById('selected-prompt-title'); // Added reference
-    const userInputTextarea = document.getElementById('user-input'); // Added reference
+    const selectedPromptTitleSpan = document.getElementById('selected-prompt-title');
+    const userInputTextarea = document.getElementById('user-input');
+    const savePromptBtn = document.getElementById('save-prompt-btn'); // Ref for Add/Edit view
+    const addEditTitle = document.getElementById('add-edit-title'); // Ref for Add/Edit view
+    const promptTitleInput = document.getElementById('prompt-title-input'); // Ref for Add/Edit view
+    const promptTextInput = document.getElementById('prompt-text-input'); // Ref for Add/Edit view
+
 
     // --- View Switching Logic ---
     /**
@@ -63,18 +68,14 @@ document.addEventListener('DOMContentLoaded', () => {
      * @param {string} viewId The ID of the view container element to show.
      */
     function showView(viewId) {
-        // Hide all views first
         promptListView.style.display = 'none';
         promptInputView.style.display = 'none';
         addEditView.style.display = 'none';
-
-        // Show the requested view
         const viewToShow = document.getElementById(viewId);
         if (viewToShow) {
-            viewToShow.style.display = 'block'; // Or 'flex' etc. if you change CSS later
+            viewToShow.style.display = 'block';
         } else {
             console.error("View with ID not found:", viewId);
-            // Fallback to default view if error
             promptListView.style.display = 'block';
         }
     }
@@ -85,8 +86,8 @@ document.addEventListener('DOMContentLoaded', () => {
      */
     async function renderPromptList() {
         try {
-            currentPrompts = await getPrompts(); // Fetch and store prompts locally
-            promptListUl.innerHTML = ''; // Clear existing list items
+            currentPrompts = await getPrompts();
+            promptListUl.innerHTML = '';
 
             if (currentPrompts.length === 0) {
                 promptListUl.innerHTML = '<li class="no-prompts-message">No prompts yet. Click (+) to add one!</li>';
@@ -135,24 +136,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Add New Prompt Button
     addPromptBtn.addEventListener('click', () => {
-        document.getElementById('add-edit-title').textContent = 'Add New Prompt';
-        document.getElementById('prompt-title-input').value = '';
-        document.getElementById('prompt-text-input').value = '';
-        document.getElementById('save-prompt-btn').removeAttribute('data-editing-id');
+        addEditTitle.textContent = 'Add New Prompt';
+        promptTitleInput.value = '';
+        promptTextInput.value = '';
+        savePromptBtn.removeAttribute('data-editing-id'); // Ensure not in edit mode
         showView('add-edit-view');
     });
 
     // Back to List Button (from Input View)
     backToListBtn.addEventListener('click', () => {
-        selectedSystemPromptText = ''; // Clear selected prompt text when going back
-        userInputTextarea.value = ''; // Clear textarea when going back
-        copyOutputBtn.disabled = true; // Disable copy button
+        selectedSystemPromptText = '';
+        userInputTextarea.value = '';
+        copyOutputBtn.disabled = true;
+        copyOutputBtn.textContent = 'Copy Output'; // Reset button text in case it was 'Copied!' or 'Error!'
         showView('prompt-list-view');
     });
 
     // Cancel Add/Edit Button
     cancelAddEditBtn.addEventListener('click', () => {
-        // No data changed, just switch view
         showView('prompt-list-view');
     });
 
@@ -160,58 +161,95 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Event Listener for Prompt List Clicks (Selection, Edit, Delete) ---
     promptListUl.addEventListener('click', (event) => {
         const targetElement = event.target;
-        // Find the closest ancestor LI element with the data-prompt-id attribute
         const listItem = targetElement.closest('li[data-prompt-id]');
 
-        if (!listItem) return; // Exit if click wasn't inside a relevant list item
+        if (!listItem) return;
 
         const promptId = listItem.dataset.promptId;
-        // Find the corresponding prompt object from our cached array
         const clickedPrompt = currentPrompts.find(p => p.id === promptId);
 
         if (!clickedPrompt) {
             console.error("Clicked prompt not found in currentPrompts array. ID:", promptId);
-            return; // Exit if prompt data inconsistency
+            return;
         }
 
-        // Check if an action icon was clicked within the list item
         if (targetElement.closest('.edit-icon')) {
-            // --- Edit Action (Phase 3) ---
             console.log("Edit icon clicked for prompt ID:", promptId);
             // TODO: Implement navigation to edit view (Stage 14)
-            // Will involve:
-            // - Setting add/edit view title to "Edit Prompt"
-            // - Populating title/text inputs with clickedPrompt.title/text
-            // - Storing promptId (e.g., on save button) to know we are editing
-            // - Calling showView('add-edit-view')
-
         } else if (targetElement.closest('.delete-icon')) {
-            // --- Delete Action (Phase 3) ---
             console.log("Delete icon clicked for prompt ID:", promptId);
             // TODO: Implement deletion logic (Stage 16)
-            // Will involve:
-            // - Showing a confirmation dialog (confirm())
-            // - If confirmed:
-            //    - Filtering currentPrompts to remove the one with promptId
-            //    - Calling savePrompts() with the filtered array
-            //    - Calling renderPromptList() to update the UI
-
         } else {
-            // --- Select Action (Assume click on title or li background) ---
+            // --- Select Action ---
             console.log("Selected prompt ID:", promptId, " Title:", clickedPrompt.title);
-
-            // Store the system prompt text for later use in copying
             selectedSystemPromptText = clickedPrompt.text;
-
-            // Update the UI in the input view
             selectedPromptTitleSpan.textContent = clickedPrompt.title;
-            userInputTextarea.value = ''; // Clear any previous user input
-            userInputTextarea.focus(); // Focus the textarea for immediate typing
-            copyOutputBtn.disabled = true; // Disable copy button initially (until user types)
-
-            // Switch to the input view
+            userInputTextarea.value = '';
+            userInputTextarea.focus();
+            copyOutputBtn.disabled = true;
+            copyOutputBtn.textContent = 'Copy Output'; // Reset button text
             showView('prompt-input-view');
         }
+    });
+
+
+    // --- Event Listener for User Input Textarea ---
+    userInputTextarea.addEventListener('input', () => {
+        // Enable copy button only if textarea is not empty (after trimming whitespace)
+        copyOutputBtn.disabled = !userInputTextarea.value.trim();
+    });
+
+
+    // --- Event Listener for Copy Output Button ---
+    copyOutputBtn.addEventListener('click', () => {
+        const userText = userInputTextarea.value.trim(); // Get trimmed user input
+
+        if (!userText || !selectedSystemPromptText) {
+            console.warn("Copy clicked but user text or system prompt is missing.");
+            return; // Should not happen if button enabling logic is correct, but safe check
+        }
+
+        // Construct the final output string using the required format
+        const finalOutput = `[[[system prompt begin]]]
+
+${selectedSystemPromptText}
+
+[[[system prompt end]]]
+
+
+[[[user prompt begin]]]
+
+${userText}
+
+[[[user prompt end]]]`;
+
+        // --- Clipboard API Integration ---
+        navigator.clipboard.writeText(finalOutput)
+            .then(() => {
+                // Success! Provide feedback
+                console.log("Text successfully copied to clipboard.");
+                const originalButtonText = 'Copy Output'; // Define original text explicitly
+                copyOutputBtn.textContent = 'Copied!';
+                copyOutputBtn.disabled = true; // Briefly disable after copy
+
+                // Optional: Close popup after a short delay
+                setTimeout(() => {
+                    window.close(); // Close the popup window
+                }, 1000); // Close after 1 second
+
+            })
+            .catch(err => {
+                // Failure! Log error and provide feedback
+                console.error('Failed to copy text: ', err);
+                const originalButtonText = 'Copy Output';
+                copyOutputBtn.textContent = 'Error!';
+                // Consider showing an error message element if needed
+                setTimeout(() => {
+                    copyOutputBtn.textContent = originalButtonText; // Revert button text
+                    // Re-enable button only if there's still text
+                    copyOutputBtn.disabled = !userInputTextarea.value.trim();
+                }, 2000); // Show error for 2 seconds
+            });
     });
 
 
