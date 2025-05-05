@@ -1,297 +1,597 @@
 // --- Storage Constants ---
-const STORAGE_KEY = 'userPrompts';
+const PROMPT_KEY_PREFIX = 'prompt_';
+const CHUNK_KEY_SEPARATOR = '_chunk_';
+// Set chunk size slightly below the 8KB limit to account for JSON encoding & key overhead
+// 8192 bytes is the limit. Let's aim for ~7KB string length. UTF-8 chars can be > 1 byte.
+// String.length isn't bytes, but provides a reasonable approximation for splitting.
+// A more precise method uses TextEncoder, but complicates splitting logic significantly.
+// We'll use String.length for simplicity, risking edge cases with mostly multi-byte chars.
+const MAX_CHUNK_LENGTH = 7000; // Max characters per chunk (adjust if needed)
+
+// --- Logging Utility ---
+const logger = {
+    log: (...args) => console.log('[PromptManager]', ...args),
+    error: (...args) => console.error('[PromptManager]', ...args),
+    warn: (...args) => console.warn('[PromptManager]', ...args),
+};
 
 // --- Storage Utility Functions ---
 
 /**
- * Retrieves prompts from chrome.storage.sync.
- * @returns {Promise<Array<object>>} A promise that resolves with the array of prompts, or an empty array if none are found or an error occurs.
+ * Retrieves all prompts, reconstructing chunked prompts automatically.
+ * @returns {Promise<Array<object>>} A promise resolving with the array of complete prompts.
  */
-async function getPrompts() {
+async function getAllPrompts() {
+    logger.log('Attempting to retrieve all prompts (including chunks).');
     try {
-        const result = await chrome.storage.sync.get([STORAGE_KEY]);
-        return Array.isArray(result[STORAGE_KEY]) ? result[STORAGE_KEY] : [];
+        const allItems = await chrome.storage.sync.get(null);
+        const promptsMap = new Map(); // Use Map to organize prompts and their chunks
+        const chunkKeys = []; // Keep track of chunk keys to ignore later
+
+        // First pass: Identify metadata and chunks
+        for (const key in allItems) {
+            if (!key.startsWith(PROMPT_KEY_PREFIX)) continue; // Ignore unrelated keys
+
+            if (key.includes(CHUNK_KEY_SEPARATOR)) {
+                // This is a chunk key, e.g., "prompt_123_chunk_0"
+                chunkKeys.push(key);
+                const [baseKey, chunkIndexStr] = key.split(CHUNK_KEY_SEPARATOR);
+                const chunkIndex = parseInt(chunkIndexStr, 10);
+                if (!isNaN(chunkIndex)) {
+                    if (!promptsMap.has(baseKey)) {
+                        promptsMap.set(baseKey, { chunks: [] }); // Initialize if metadata not seen yet
+                    }
+                    const promptData = promptsMap.get(baseKey);
+                    // Store chunk text directly at the correct index (sparse array possible initially)
+                    promptData.chunks[chunkIndex] = allItems[key];
+                } else {
+                    logger.warn(`Invalid chunk index found in key: ${key}`);
+                }
+            } else {
+                // This is potentially a metadata key or a non-chunked prompt key, e.g., "prompt_123"
+                const promptData = allItems[key];
+                if (promptData && typeof promptData === 'object' && promptData.id) {
+                    if (!promptsMap.has(key)) {
+                        promptsMap.set(key, { metadata: promptData, chunks: [] }); // Initialize if chunks not seen yet
+                    } else {
+                        promptsMap.get(key).metadata = promptData; // Add metadata if chunks seen first
+                    }
+                } else {
+                     logger.warn(`Invalid prompt data found for key: ${key}`, promptData);
+                }
+            }
+        }
+
+        // Second pass: Reconstruct prompts
+        const finalPromptsArray = [];
+        for (const [baseKey, data] of promptsMap.entries()) {
+             if (!data.metadata) {
+                 logger.warn(`Missing metadata for potential prompt with base key: ${baseKey}. Skipping.`);
+                 continue;
+             }
+
+            const metadata = data.metadata;
+
+            if (metadata.hasOwnProperty('chunkCount') && metadata.chunkCount > 0) {
+                // Reconstruct chunked prompt
+                logger.log(`Reconstructing chunked prompt ID: ${metadata.id}, expected chunks: ${metadata.chunkCount}`);
+                let fullText = '';
+                let missingChunk = false;
+                for (let i = 0; i < metadata.chunkCount; i++) {
+                    const chunkText = data.chunks[i];
+                    if (typeof chunkText === 'string') {
+                        fullText += chunkText;
+                    } else {
+                        logger.error(`Missing or invalid chunk index ${i} for prompt ID: ${metadata.id} (key: ${baseKey})`);
+                        missingChunk = true;
+                        break; // Stop reconstruction for this prompt
+                    }
+                }
+
+                if (!missingChunk) {
+                    finalPromptsArray.push({
+                        id: metadata.id,
+                        title: metadata.title,
+                        text: fullText
+                    });
+                    logger.log(`Successfully reconstructed prompt ID: ${metadata.id}`);
+                } else {
+                    // Decide how to handle partially recovered prompts. Skip for now.
+                     logger.error(`Failed to reconstruct prompt ID: ${metadata.id} due to missing chunks.`);
+                     // Optional: Add a placeholder or error state prompt?
+                }
+
+            } else if (metadata.hasOwnProperty('text')) {
+                // This is a non-chunked prompt
+                finalPromptsArray.push(metadata); // Contains id, title, text
+                 logger.log(`Retrieved non-chunked prompt ID: ${metadata.id}`);
+            } else {
+                 logger.warn(`Metadata for key ${baseKey} (ID: ${metadata.id}) has neither 'text' nor 'chunkCount'. Skipping.`);
+            }
+        }
+
+        logger.log(`Retrieved and processed ${finalPromptsArray.length} prompts.`);
+        finalPromptsArray.sort((a, b) => a.title.localeCompare(b.title));
+        return finalPromptsArray;
+
     } catch (error) {
-        console.error("Error retrieving prompts:", error);
-        return [];
+        logger.error('Error retrieving/reconstructing prompts:', error.message, error.stack);
+        return []; // Return empty on error
     }
 }
-// Make getPrompts accessible from console for debugging (optional)
-window.getPrompts = getPrompts;
+
 
 /**
- * Saves the provided array of prompts to chrome.storage.sync.
- * @param {Array<object>} promptsArray The array of prompt objects to save.
- * @returns {Promise<void>} A promise that resolves when saving is complete, or rejects on error.
+ * Saves a single prompt, automatically chunking if text exceeds MAX_CHUNK_LENGTH.
+ * Handles cleaning up old data/chunks if the prompt existed before.
+ * @param {object} promptObject The prompt object to save {id, title, text}.
+ * @returns {Promise<void>} A promise resolving when saving is complete, or rejecting on error.
  */
-async function savePrompts(promptsArray) {
+async function savePrompt(promptObject) {
+    if (!promptObject || !promptObject.id || !promptObject.title || typeof promptObject.text !== 'string') {
+        const errorMsg = 'Invalid prompt object provided for saving.';
+        logger.error(errorMsg, promptObject);
+        throw new Error(errorMsg);
+    }
+
+    const { id, title, text } = promptObject;
+    const baseKey = `${PROMPT_KEY_PREFIX}${id}`;
+    logger.log(`Attempting to save prompt ID: ${id}, Title: ${title}. Checking size.`);
+
+    // --- Cleanup Strategy: Always remove potentially existing data first ---
+    // This simplifies logic by not needing to know the *previous* chunk state.
+    // 1. Find all keys related to this prompt ID (metadata + any old chunks).
+    // 2. Remove them all.
+    // 3. Save the new data (either single item or metadata + new chunks).
     try {
-        await chrome.storage.sync.set({ [STORAGE_KEY]: promptsArray });
-        console.log("Prompts saved successfully.");
+        const allItems = await chrome.storage.sync.get(null);
+        const keysToRemove = [];
+        for (const key in allItems) {
+            if (key.startsWith(baseKey)) { // Matches baseKey or baseKey + _chunk_...
+                keysToRemove.push(key);
+            }
+        }
+        if (keysToRemove.length > 0) {
+             logger.log(`Found existing data/chunks for prompt ID ${id}. Removing keys:`, keysToRemove);
+             await chrome.storage.sync.remove(keysToRemove);
+        } else {
+             logger.log(`No existing data found for prompt ID ${id}. Proceeding with save.`);
+        }
     } catch (error) {
-        console.error("Error saving prompts:", error);
+         logger.error(`Error during cleanup phase for prompt ID ${id}:`, error.message, error.stack);
+         throw new Error(`Failed during cleanup before saving prompt ${id}.`); // Abort save
+    }
+
+    // --- Save Strategy: Check size and save accordingly ---
+    try {
+        // Estimate size based on string length (approximation)
+        if (text.length <= MAX_CHUNK_LENGTH) {
+            // Save as a single item
+            logger.log(`Prompt ID ${id} is small enough. Saving as single item.`);
+            const dataToSave = { [baseKey]: { id, title, text } };
+            await chrome.storage.sync.set(dataToSave);
+            logger.log(`Prompt ID ${id} saved successfully as single item.`);
+
+        } else {
+            // Save as chunked item
+            logger.log(`Prompt ID ${id} text length (${text.length}) exceeds MAX_CHUNK_LENGTH (${MAX_CHUNK_LENGTH}). Chunking necessary.`);
+            const chunks = [];
+            for (let i = 0; text.length > i * MAX_CHUNK_LENGTH; i++) {
+                chunks.push(text.substring(i * MAX_CHUNK_LENGTH, (i + 1) * MAX_CHUNK_LENGTH));
+            }
+            const chunkCount = chunks.length;
+             logger.log(`Split prompt ID ${id} into ${chunkCount} chunks.`);
+
+            // Save metadata first
+            const metadata = { id, title, chunkCount };
+            const metadataToSave = { [baseKey]: metadata };
+             logger.log(`Saving metadata for chunked prompt ID ${id}:`, metadata);
+            await chrome.storage.sync.set(metadataToSave);
+
+            // Save each chunk individually
+            for (let i = 0; i < chunkCount; i++) {
+                const chunkKey = `${baseKey}${CHUNK_KEY_SEPARATOR}${i}`;
+                const chunkData = chunks[i];
+                const chunkToSave = { [chunkKey]: chunkData };
+                // Estimate chunk size before saving (more accurate check)
+                 const chunkByteLength = new TextEncoder().encode(chunkData).length;
+                 logger.log(`Saving chunk ${i}/${chunkCount-1} for prompt ID ${id}. Key: ${chunkKey}, Approx Byte Size: ${chunkByteLength}`);
+
+                 if (chunkByteLength >= 8192) {
+                     // This *shouldn't* happen with MAX_CHUNK_LENGTH=7000 if chars are mostly 1-byte,
+                     // but possible with highly dense multi-byte chars.
+                     logger.error(`CRITICAL: Calculated chunk ${i} for prompt ID ${id} is too large (${chunkByteLength} bytes) even after splitting by length! Aborting save.`);
+                     // Attempt cleanup of already saved metadata/chunks? Risky. Best to alert user.
+                     throw new Error(`Failed to save: A text chunk for "${title}" is still too large (${chunkByteLength} bytes) even after splitting. The text may contain many multi-byte characters. Try shortening it further.`);
+                 }
+
+                try {
+                    await chrome.storage.sync.set(chunkToSave);
+                } catch (chunkError) {
+                    logger.error(`Error saving chunk ${i} for prompt ID ${id}:`, chunkError.message, chunkError.stack);
+                    // If a chunk fails, the prompt is now in an inconsistent state.
+                    // Attempting automatic rollback is complex. Inform user.
+                    throw new Error(`Failed to save chunk ${i} for prompt "${title}". Storage may be inconsistent. Error: ${chunkError.message}`);
+                }
+            }
+            logger.log(`All ${chunkCount} chunks saved successfully for prompt ID ${id}.`);
+        }
+    } catch (error) {
+        logger.error(`Error during save phase for prompt ID ${id}:`, error.message, error.stack);
+        // Check if it's a quota error (maybe total quota?)
+         if (error.message.includes('QUOTA_BYTES')) { // Catch QUOTA_BYTES_PER_ITEM or overall QUOTA_BYTES
+             logger.error(`Quota exceeded while saving prompt ID ${id}.`);
+             throw new Error(`Storage quota exceeded while saving "${title}". You may need to delete older/larger prompts. Specific error: ${error.message}`);
+         }
+        // Re-throw specific errors from chunking or re-throw generic error
         throw error;
     }
 }
-// Make savePrompts accessible from console for debugging
-window.savePrompts = savePrompts;
+
+
+/**
+ * Deletes a prompt and all its associated chunks (if any).
+ * @param {string} promptId The ID of the prompt to delete.
+ * @returns {Promise<void>} A promise resolving when deletion is complete, or rejecting on error.
+ */
+async function deletePrompt(promptId) {
+    if (!promptId) {
+        const errorMsg = 'Invalid prompt ID provided for deletion.';
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+    }
+    const baseKey = `${PROMPT_KEY_PREFIX}${promptId}`;
+    logger.log(`Attempting to delete prompt ID: ${promptId} (base key: ${baseKey}) and any associated chunks.`);
+
+    // Find all keys related to this prompt ID to ensure complete removal
+    try {
+        const allItems = await chrome.storage.sync.get(null);
+        const keysToRemove = [];
+        for (const key in allItems) {
+            // Check if the key is the base key OR starts with the base key + chunk separator
+            if (key === baseKey || key.startsWith(`${baseKey}${CHUNK_KEY_SEPARATOR}`)) {
+                keysToRemove.push(key);
+            }
+        }
+
+        if (keysToRemove.length > 0) {
+            logger.log(`Found keys to remove for prompt ID ${promptId}:`, keysToRemove);
+            await chrome.storage.sync.remove(keysToRemove);
+            logger.log(`Successfully removed data for prompt ID: ${promptId}.`);
+        } else {
+            logger.warn(`No data found in storage for prompt ID: ${promptId}. Deletion request ignored.`);
+        }
+    } catch (error) {
+        logger.error(`Error deleting prompt ID ${promptId}:`, error.message, error.stack);
+        throw new Error(`Failed to delete prompt data for ID ${promptId}. Error: ${error.message}`);
+    }
+}
 
 
 // --- Main Popup Logic ---
+// No changes needed below this line, as it interacts with the abstracted
+// getAllPrompts, savePrompt, deletePrompt functions which now handle chunking internally.
+// ... (rest of popup.js remains the same as in the previous refactoring step) ...
+
 document.addEventListener('DOMContentLoaded', () => {
     // Keep track of the currently loaded prompts and selected prompt text
-    let currentPrompts = [];
+    let currentPrompts = []; // Local cache of prompts
     let selectedSystemPromptText = '';
+    let currentEditingId = null; // Track ID being edited, null if adding new
 
     // Get references to the main view containers
     const promptListView = document.getElementById('prompt-list-view');
     const promptInputView = document.getElementById('prompt-input-view');
     const addEditView = document.getElementById('add-edit-view');
 
-    // Get references to navigation/action buttons and interactive elements
-    const addPromptBtn = document.getElementById('add-prompt-btn');
-    const backToListBtn = document.getElementById('back-to-list-btn');
-    const cancelAddEditBtn = document.getElementById('cancel-add-edit-btn');
-    const copyOutputBtn = document.getElementById('copy-output-btn');
-    const promptListUl = document.getElementById('prompt-list');
-    const selectedPromptTitleSpan = document.getElementById('selected-prompt-title');
-    const userInputTextarea = document.getElementById('user-input');
-    const savePromptBtn = document.getElementById('save-prompt-btn');
-    const addEditTitle = document.getElementById('add-edit-title');
+    // Get references to UI elements (using more descriptive names)
+    const addPromptButton = document.getElementById('add-prompt-btn');
+    const backToListButton = document.getElementById('back-to-list-btn');
+    const cancelAddEditButton = document.getElementById('cancel-add-edit-btn');
+    const copyOutputButton = document.getElementById('copy-output-btn');
+    const promptListElement = document.getElementById('prompt-list');
+    const selectedPromptTitleElement = document.getElementById('selected-prompt-title');
+    const userInputTextArea = document.getElementById('user-input');
+    const savePromptButton = document.getElementById('save-prompt-btn');
+    const addEditTitleElement = document.getElementById('add-edit-title');
     const promptTitleInput = document.getElementById('prompt-title-input');
     const promptTextInput = document.getElementById('prompt-text-input');
 
 
-    // --- View Switching Logic ---
+    // --- View Management ---
+    const views = {
+        LIST: 'prompt-list-view',
+        INPUT: 'prompt-input-view',
+        EDIT: 'add-edit-view'
+    };
+
     function showView(viewId) {
-        promptListView.style.display = 'none';
-        promptInputView.style.display = 'none';
-        addEditView.style.display = 'none';
+        logger.log(`Switching view to: ${viewId}`);
+        // Hide all views first
+        Object.values(views).forEach(id => {
+            const viewElement = document.getElementById(id);
+            if (viewElement) {
+                viewElement.style.display = 'none';
+            }
+        });
+
+        // Show the target view
         const viewToShow = document.getElementById(viewId);
         if (viewToShow) {
             viewToShow.style.display = 'block';
         } else {
-            console.error("View with ID not found:", viewId);
-            promptListView.style.display = 'block'; // Fallback
+            logger.error("View ID not found:", viewId, "Falling back to list view.");
+            document.getElementById(views.LIST).style.display = 'block'; // Fallback
         }
     }
 
-    // --- Prompt List Rendering ---
-    async function renderPromptList() {
-        try {
-            currentPrompts = await getPrompts(); // Update local cache
-            promptListUl.innerHTML = ''; // Clear current list
+    // --- UI Rendering ---
+    function renderPromptListUI() {
+        logger.log('Rendering prompt list UI with', currentPrompts.length, 'prompts.');
+        promptListElement.innerHTML = ''; // Clear current list
 
-            if (currentPrompts.length === 0) {
-                promptListUl.innerHTML = '<li class="no-prompts-message">No prompts yet. Click (+) to add one!</li>';
-                return;
-            }
-
-            // Sort prompts alphabetically by title for consistency
-            currentPrompts.sort((a, b) => a.title.localeCompare(b.title));
-
-            currentPrompts.forEach(prompt => {
-                const listItem = document.createElement('li');
-                listItem.setAttribute('data-prompt-id', prompt.id);
-
-                const titleSpan = document.createElement('span');
-                titleSpan.classList.add('prompt-title');
-                titleSpan.textContent = prompt.title;
-
-                const iconsSpan = document.createElement('span');
-                iconsSpan.classList.add('action-icons');
-
-                const editIcon = document.createElement('span');
-                editIcon.classList.add('edit-icon');
-                editIcon.setAttribute('data-prompt-id', prompt.id);
-                editIcon.textContent = '✏️';
-                editIcon.title = "Edit prompt";
-
-                const deleteIcon = document.createElement('span');
-                deleteIcon.classList.add('delete-icon');
-                deleteIcon.setAttribute('data-prompt-id', prompt.id);
-                deleteIcon.textContent = '🗑️';
-                deleteIcon.title = "Delete prompt";
-
-                iconsSpan.appendChild(editIcon);
-                iconsSpan.appendChild(deleteIcon);
-
-                listItem.appendChild(titleSpan);
-                listItem.appendChild(iconsSpan);
-
-                promptListUl.appendChild(listItem);
-            });
-        } catch (error) {
-            console.error("Failed to render prompt list:", error);
-            promptListUl.innerHTML = '<li class="error-message">Error loading prompts.</li>';
-        }
-    }
-
-
-    // --- Navigation Event Listeners ---
-
-    // Add New Prompt Button
-    addPromptBtn.addEventListener('click', () => {
-        addEditTitle.textContent = 'Add New Prompt';
-        promptTitleInput.value = ''; // Clear fields
-        promptTextInput.value = '';
-        savePromptBtn.removeAttribute('data-editing-id'); // Ensure not in edit mode
-        promptTitleInput.focus(); // Focus title input
-        showView('add-edit-view');
-    });
-
-    // Back to List Button (from Input View)
-    backToListBtn.addEventListener('click', () => {
-        selectedSystemPromptText = '';
-        userInputTextarea.value = '';
-        copyOutputBtn.disabled = true;
-        copyOutputBtn.textContent = 'Copy Output';
-        showView('prompt-list-view');
-    });
-
-    // Cancel Add/Edit Button
-    cancelAddEditBtn.addEventListener('click', () => {
-        showView('prompt-list-view'); // Simply return to list
-    });
-
-
-    // --- Core Action Event Listeners ---
-
-    // Prompt List Clicks (Selection, Edit, Delete)
-    promptListUl.addEventListener('click', async (event) => { // Made async for delete
-        const targetElement = event.target;
-        const listItem = targetElement.closest('li[data-prompt-id]');
-        if (!listItem) return;
-
-        const promptId = listItem.dataset.promptId;
-        const clickedPrompt = currentPrompts.find(p => p.id === promptId);
-        if (!clickedPrompt) {
-            console.error("Clicked prompt not found. ID:", promptId);
+        if (currentPrompts.length === 0) {
+            promptListElement.innerHTML = '<li class="no-prompts-message">No prompts yet. Click (+) to add one!</li>';
             return;
         }
 
-        // --- EDIT ACTION ---
-        if (targetElement.closest('.edit-icon')) {
-            console.log("Edit icon clicked for prompt ID:", promptId);
-            addEditTitle.textContent = 'Edit Prompt';
-            promptTitleInput.value = clickedPrompt.title; // Populate form
-            promptTextInput.value = clickedPrompt.text;
-            savePromptBtn.setAttribute('data-editing-id', promptId); // Set mode to Edit
-            promptTitleInput.focus(); // Focus title input
-            showView('add-edit-view');
+        // Note: Sorting is now done in getAllPrompts
 
-        // --- DELETE ACTION ---
-        } else if (targetElement.closest('.delete-icon')) {
-            console.log("Delete icon clicked for prompt ID:", promptId);
-            if (confirm(`Are you sure you want to delete the prompt "${clickedPrompt.title}"?`)) {
-                try {
-                    const updatedPrompts = currentPrompts.filter(p => p.id !== promptId);
-                    await savePrompts(updatedPrompts); // Save the filtered array
-                    await renderPromptList(); // Refresh the list display
-                    console.log("Prompt deleted successfully.");
-                    // Optional: Add visual feedback for deletion
-                } catch (error) {
-                    console.error("Error deleting prompt:", error);
-                    alert("Failed to delete prompt. See console for details."); // User feedback
-                }
-            }
+        currentPrompts.forEach(prompt => {
+            const listItem = document.createElement('li');
+            listItem.setAttribute('data-prompt-id', prompt.id);
 
-        // --- SELECT ACTION ---
-        } else {
-            console.log("Selected prompt ID:", promptId, " Title:", clickedPrompt.title);
-            selectedSystemPromptText = clickedPrompt.text;
-            selectedPromptTitleSpan.textContent = clickedPrompt.title;
-            userInputTextarea.value = '';
-            userInputTextarea.focus();
-            copyOutputBtn.disabled = true;
-            copyOutputBtn.textContent = 'Copy Output';
-            showView('prompt-input-view');
+            const titleSpan = document.createElement('span');
+            titleSpan.classList.add('prompt-title');
+            titleSpan.textContent = prompt.title;
+            listItem.appendChild(titleSpan); // Add title first
+
+             // Create icons container
+            const iconsSpan = document.createElement('span');
+            iconsSpan.classList.add('action-icons');
+
+            // Edit Icon
+            const editIcon = document.createElement('span');
+            editIcon.classList.add('edit-icon');
+            editIcon.setAttribute('data-prompt-id', prompt.id); // Redundant? ListItem has it. Keep for clarity.
+            editIcon.textContent = '\u270F\uFE0F'; // Edit icon (pencil)
+            editIcon.title = `Edit "${prompt.title}"`;
+            editIcon.addEventListener('click', (event) => {
+                event.stopPropagation(); // Prevent list item's main click handler
+                handleEditPrompt(prompt.id);
+            });
+            iconsSpan.appendChild(editIcon);
+
+            // Delete Icon
+            const deleteIcon = document.createElement('span');
+            deleteIcon.classList.add('delete-icon');
+            deleteIcon.setAttribute('data-prompt-id', prompt.id);
+            deleteIcon.textContent = '\uD83D\uDDD1\uFE0F'; // Delete icon (wastebasket)
+            deleteIcon.title = `Delete "${prompt.title}"`;
+             deleteIcon.addEventListener('click', (event) => {
+                event.stopPropagation(); // Prevent list item's main click handler
+                handleDeletePrompt(prompt.id, prompt.title);
+            });
+            iconsSpan.appendChild(deleteIcon);
+
+            listItem.appendChild(iconsSpan); // Add icons container
+
+            // Add main click handler for selection
+             listItem.addEventListener('click', () => {
+                 handleSelectPrompt(prompt.id);
+             });
+
+            promptListElement.appendChild(listItem);
+        });
+         logger.log('Prompt list UI rendering complete.');
+    }
+
+    // --- Data Loading and State Update ---
+    async function loadAndRenderPrompts() {
+        logger.log("Initiating prompt loading and rendering.");
+        try {
+            currentPrompts = await getAllPrompts(); // Fetch fresh data (handles chunking)
+            renderPromptListUI(); // Update the UI
+        } catch (error) {
+            // Error is logged within getAllPrompts, potentially show UI feedback
+            logger.error("Failed to load and render prompts.", error.message);
+            promptListElement.innerHTML = '<li class="error-message">Error loading prompts. Check console.</li>';
         }
-    });
+    }
 
-    // User Input Textarea (for enabling copy button)
-    userInputTextarea.addEventListener('input', () => {
-        copyOutputBtn.disabled = !userInputTextarea.value.trim();
-    });
 
-    // Copy Output Button
-    copyOutputBtn.addEventListener('click', () => {
-        const userText = userInputTextarea.value.trim();
-        if (!userText || !selectedSystemPromptText) return;
+    // --- Event Handlers ---
+
+    function handleAddPromptClick() {
+        logger.log("Add prompt button clicked.");
+        currentEditingId = null; // Ensure we are in "add" mode
+        addEditTitleElement.textContent = 'Add New Prompt';
+        promptTitleInput.value = '';
+        promptTextInput.value = '';
+        promptTitleInput.focus();
+        showView(views.EDIT);
+    }
+
+    function handleBackToListClick() {
+         logger.log("Back to list button clicked.");
+         selectedSystemPromptText = ''; // Clear selected prompt state
+         userInputTextArea.value = '';
+         copyOutputButton.disabled = true;
+         copyOutputButton.textContent = 'Copy Output';
+         showView(views.LIST);
+    }
+
+    function handleCancelAddEditClick() {
+         logger.log("Cancel add/edit button clicked.");
+         showView(views.LIST); // Simply return to list
+         // Clear editing state just in case
+         currentEditingId = null;
+         promptTitleInput.value = '';
+         promptTextInput.value = '';
+    }
+
+    function handleUserInput() {
+        copyOutputButton.disabled = !userInputTextArea.value.trim();
+        // Reset button text if user types after a copy/error
+        if(copyOutputButton.textContent !== 'Copy Output') {
+             copyOutputButton.textContent = 'Copy Output';
+        }
+    }
+
+     function handleCopyOutputClick() {
+        const userText = userInputTextArea.value.trim();
+        if (!userText || !selectedSystemPromptText) {
+             logger.warn("Copy attempt failed: Missing user text or system prompt.");
+            return;
+        }
 
         const finalOutput = `[[[system prompt begin]]]\n\n${selectedSystemPromptText}\n\n[[[system prompt end]]]\n\n\n[[[user prompt begin]]]\n\n${userText}\n\n[[[user prompt end]]]`;
+        logger.log("Attempting to copy combined output to clipboard.", { length: finalOutput.length });
 
         navigator.clipboard.writeText(finalOutput)
             .then(() => {
-                copyOutputBtn.textContent = 'Copied!';
-                copyOutputBtn.disabled = true;
-                setTimeout(() => window.close(), 1000);
+                logger.log("Text copied successfully.");
+                copyOutputButton.textContent = 'Copied!';
+                copyOutputButton.disabled = true;
+                // Close popup after a short delay
+                setTimeout(() => window.close(), 800); // Slightly shorter delay
             })
             .catch(err => {
-                console.error('Failed to copy text: ', err);
-                copyOutputBtn.textContent = 'Error!';
+                logger.error('Failed to copy text:', err.message, err.stack);
+                copyOutputButton.textContent = 'Error!';
+                // Re-enable button after showing error, only if there's still text
                 setTimeout(() => {
-                     copyOutputBtn.textContent = 'Copy Output';
-                     copyOutputBtn.disabled = !userInputTextarea.value.trim(); // Re-enable if there's text
+                     copyOutputButton.textContent = 'Copy Output';
+                     copyOutputButton.disabled = !userInputTextArea.value.trim();
                 }, 2000);
             });
-    });
+    }
 
-    // Save Prompt Button (Handles BOTH Add New and Update Existing)
-    savePromptBtn.addEventListener('click', async () => {
+    async function handleSavePromptClick() {
         const title = promptTitleInput.value.trim();
         const text = promptTextInput.value.trim();
-        const editingId = savePromptBtn.getAttribute('data-editing-id');
 
         // Basic Validation
         if (!title || !text) {
+            logger.warn("Save attempt failed: Title or text is empty.");
             alert("Prompt title and text cannot be empty.");
             return;
         }
 
+        logger.log(`Save button clicked. Mode: ${currentEditingId ? 'Update' : 'Add'}. Title: ${title}`);
+
+        let promptToSave;
+        const promptId = currentEditingId || Date.now().toString(); // Use existing ID or generate new one
+
+        if (currentEditingId) {
+             logger.log("Preparing to update prompt ID:", currentEditingId);
+        } else {
+             logger.log("Preparing to add new prompt with ID:", promptId);
+        }
+        promptToSave = { id: promptId, title, text }; // Construct the object to save
+
+
         try {
-            let updatedPrompts = await getPrompts(); // Get current prompts
+            await savePrompt(promptToSave); // Use the chunking-aware save function
+            logger.log(`Prompt ${promptToSave.id} processed successfully.`);
 
-            if (editingId) {
-                // --- UPDATE existing prompt ---
-                const promptIndex = updatedPrompts.findIndex(p => p.id === editingId);
-                if (promptIndex > -1) {
-                    updatedPrompts[promptIndex] = { ...updatedPrompts[promptIndex], title, text };
-                    console.log("Updating prompt ID:", editingId);
-                } else {
-                     throw new Error("Prompt to update not found."); // Should not happen
-                }
-            } else {
-                // --- ADD new prompt ---
-                const newPrompt = {
-                    id: Date.now().toString(), // Simple timestamp ID
-                    title: title,
-                    text: text
-                };
-                updatedPrompts.push(newPrompt);
-                console.log("Adding new prompt:", newPrompt.title);
-            }
-
-            await savePrompts(updatedPrompts); // Save the modified array
-            await renderPromptList(); // Refresh the list view
-            showView('prompt-list-view'); // Go back to the list view
+            // Reload prompts from storage to ensure consistency and reflect changes
+            await loadAndRenderPrompts();
+            showView(views.LIST); // Go back to the list view
 
         } catch (error) {
-            console.error("Error saving prompt:", error);
-            alert("Failed to save prompt. See console for details."); // User feedback
+            logger.error("Error saving prompt:", error.message, error.stack);
+            // Display specific errors (like chunk too large, quota exceeded) from savePrompt
+            alert(`Failed to save prompt: ${error.message}`); // Show specific error to user
+            // Do not switch view on error, allow user to correct or retry
         } finally {
-            // Clean up editing state regardless of success/failure
-            savePromptBtn.removeAttribute('data-editing-id');
+            // Clean up editing state only if it was an edit operation
+            currentEditingId = null;
+             // Clear form? Desirable after successful save, maybe not after error.
+             // Let's clear it for now.
+             promptTitleInput.value = '';
+             promptTextInput.value = '';
+
         }
-    });
+    }
+
+    // --- Actions Triggered from List Items ---
+
+    function handleSelectPrompt(promptId) {
+         const selectedPrompt = currentPrompts.find(p => p.id === promptId);
+         if (!selectedPrompt) {
+             logger.error("Select failed: Clicked prompt not found in current list. ID:", promptId);
+             alert("Error: Could not find the selected prompt.");
+             return;
+         }
+
+         logger.log("Selected prompt ID:", promptId, " Title:", selectedPrompt.title);
+         selectedSystemPromptText = selectedPrompt.text;
+         selectedPromptTitleElement.textContent = selectedPrompt.title;
+         userInputTextArea.value = ''; // Clear previous input
+         copyOutputButton.disabled = true;
+         copyOutputButton.textContent = 'Copy Output';
+         showView(views.INPUT);
+         userInputTextArea.focus();
+    }
+
+     function handleEditPrompt(promptId) {
+         const promptToEdit = currentPrompts.find(p => p.id === promptId);
+         if (!promptToEdit) {
+             logger.error("Edit failed: Prompt to edit not found. ID:", promptId);
+             alert("Error: Could not find the prompt to edit.");
+             return;
+         }
+
+         logger.log("Edit icon clicked for prompt ID:", promptId);
+         currentEditingId = promptId; // Set editing mode
+         addEditTitleElement.textContent = 'Edit Prompt';
+         promptTitleInput.value = promptToEdit.title;
+         promptTextInput.value = promptToEdit.text; // Load full text (reconstructed by getAllPrompts)
+         showView(views.EDIT);
+         promptTitleInput.focus();
+     }
+
+     async function handleDeletePrompt(promptId, promptTitle) {
+         logger.log("Delete icon clicked for prompt ID:", promptId, "Title:", promptTitle);
+         // Use promptTitle in confirmation for better UX
+         if (confirm(`Are you sure you want to delete the prompt "${promptTitle}"?`)) {
+             logger.log("User confirmed deletion for prompt ID:", promptId);
+             try {
+                 await deletePrompt(promptId); // Use chunking-aware delete function
+                 logger.log(`Deletion successful for prompt ID: ${promptId}. Refreshing list.`);
+                 // Reload prompts from storage and re-render the list
+                 await loadAndRenderPrompts();
+                 // Optional: Add visual feedback for deletion? (e.g., temporary message)
+             } catch (error) {
+                 logger.error("Error deleting prompt:", error.message, error.stack);
+                 alert("Failed to delete prompt. See console for details."); // User feedback
+             }
+         } else {
+              logger.log("User cancelled deletion for prompt ID:", promptId);
+         }
+     }
 
 
     // --- Initialization ---
     async function initializePopup() {
-        await renderPromptList(); // Load and display prompts first
-        showView('prompt-list-view'); // Show the list view
+        logger.log("Initializing popup.");
+        await loadAndRenderPrompts(); // Load data and render the initial list
+        showView(views.LIST);        // Ensure the list view is shown first
+
+         // Attach primary event listeners
+        addPromptButton.addEventListener('click', handleAddPromptClick);
+        backToListButton.addEventListener('click', handleBackToListClick);
+        cancelAddEditButton.addEventListener('click', handleCancelAddEditClick);
+        copyOutputButton.addEventListener('click', handleCopyOutputClick);
+        userInputTextArea.addEventListener('input', handleUserInput);
+        savePromptButton.addEventListener('click', handleSavePromptClick);
+
+        // Note: List item click/edit/delete listeners are added during renderPromptListUI
+
+        logger.log("Popup initialization complete.");
     }
 
-    initializePopup(); // Run initialization
+    initializePopup(); // Start the application logic
 
 }); // End of DOMContentLoaded
