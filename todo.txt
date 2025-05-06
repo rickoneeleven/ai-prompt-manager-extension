@@ -1,0 +1,1 @@
+- create a backup/restore button, backup takes a dump of prompts into an xml/json file, restore takes said file and restores all prompts
