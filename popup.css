@@ -111,20 +111,19 @@ label {
 #prompt-list li .action-icons span:hover {
      opacity: 1.0;
 }
-/* Placeholder styling for edit/delete icons - will be refined when icons are added */
+
 .edit-icon {
-    color: #5f6368; /* Example color */
+    color: #5f6368;
 }
 
 .delete-icon {
-    color: #d93025; /* Example color */
+    color: #d93025;
 }
 
 #add-prompt-btn {
     font-size: 20px; /* Make the '+' bigger */
     padding: 5px 12px;
-    float: right; /* Position bottom-right of its container conceptually (though layout might affect exact spot) */
-    /* You might want more specific positioning later */
+    float: right;
 }
 
 /* --- Prompt Input View --- */
@@ -136,9 +135,38 @@ label {
     color: #555;
 }
 
-#prompt-input-view textarea {
-    height: 150px; /* More space for user input */
+#prompt-input-view #user-input {
+    width: 100%;
+    min-height: 100px; /* Default height, similar to textarea */
+    max-height: 150px; /* Max height before scroll */
+    padding: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 14px;
+    font-family: inherit;
+    background-color: #fff;
+    overflow-y: auto; /* Allow scrolling for overflow */
+    resize: vertical; /* Allow vertical resizing */
 }
+
+#prompt-input-view #user-input:empty:before {
+    content: attr(aria-placeholder);
+    color: #999;
+    pointer-events: none; /* Allow clicks to focus the div */
+}
+
+#prompt-input-view #user-input img {
+    max-width: 100%; /* Responsive image */
+    max-height: 180px; /* Limit image preview height */
+    display: block; /* Ensure it takes its own line */
+    margin-top: 8px;
+    margin-bottom: 8px;
+    border-radius: 3px;
+    border: 1px solid #eee;
+}
+
 
 #prompt-input-view button {
     margin-top: 10px;
@@ -149,13 +177,3 @@ label {
 #add-edit-view {
     /* No specific styles needed initially, relies on general element styles */
 }
-
-
-/* --- Hidden Views --- */
-/* Although set inline in HTML, you could also control this via CSS classes */
-/* Example:
-.hidden {
-    display: none;
-}
-*/
-/* We'll stick with inline for now as JS will toggle display directly */
