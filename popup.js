@@ -1,18 +1,20 @@
+// popup.js
 document.addEventListener('DOMContentLoaded', async () => {
     let currentPrompts = [];
     let selectedSystemPromptText = '';
     let currentEditingId = null;
-    let currentPastedImageBase64 = null; // Full data URI string of the image visually in the editor AND fully processed for copy
-
-    // Holds the image data (base64 URI, mimeType, blob) currently processed from paste
+    
+    let currentPastedImageBase64 = null; 
     let locallyStagedImage = {
         dataURI: null,
         mimeType: null,
         blob: null
     };
 
-    const PENDING_IMAGE_STORAGE_KEY = 'promptManagerPendingImage';
+    // PENDING_IMAGE_STORAGE_KEY is no longer used for chrome.storage.session for image data
+    // const PENDING_IMAGE_STORAGE_KEY = 'promptManagerPendingImage'; // Keep for potential other uses or remove if only for image
 
+    // DOM Element Getters
     const promptListView = document.getElementById('prompt-list-view');
     const promptInputView = document.getElementById('prompt-input-view');
     const addEditView = document.getElementById('add-edit-view');
@@ -33,6 +35,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         INPUT: 'prompt-input-view',
         EDIT: 'add-edit-view'
     };
+
+    // --- Utility Functions ---
 
     function parseDataURI(dataURI) {
         if (!dataURI || !dataURI.startsWith('data:')) {
@@ -69,26 +73,61 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    async function clearPendingImageFromSession() {
-        logger.log("Popup: Clearing pending image data from session storage.");
+    async function convertFileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = error => reject(error);
+            reader.readAsDataURL(file);
+        });
+    }
+    
+    function escapeHtml(unsafeText) {
+        const div = document.createElement('div');
+        div.innerText = unsafeText;
+        return div.innerHTML;
+    }
+
+    // --- State Management Functions ---
+
+    async function clearPendingImageFromBackground() {
+        logger.log("Popup: Requesting background SW to clear any pending image data.");
         try {
-            await chrome.storage.session.remove(PENDING_IMAGE_STORAGE_KEY);
+            const response = await chrome.runtime.sendMessage({ action: 'clearStoredImage' });
+            if (response && response.success) {
+                logger.log("Popup: Background SW confirmed pending image cleared.");
+            } else {
+                logger.warn("Popup: Background SW did not confirm pending image cleared or responded with failure.", response);
+            }
         } catch (error) {
-            logger.error("Popup: Error clearing pending image from session storage:", error.message, error.stack);
+            logger.error("Popup: Error sending 'clearStoredImage' message to background SW:", error.message, error.stack);
+            if (error.message.includes("Could not establish connection") || error.message.includes("Receiving end does not exist")) {
+                 logger.warn("Popup: Service worker might be inactive. This is sometimes okay for a clear operation.");
+            }
         }
     }
 
     function resetLocallyStagedImage() {
-        logger.log("Popup: Clearing locally staged image data.");
+        logger.log("Popup: Resetting locally staged image data (current image's advanced copy features).");
         locallyStagedImage.dataURI = null;
         locallyStagedImage.mimeType = null;
         locallyStagedImage.blob = null;
+    }
+    
+    function clearUserInputFullState() {
+        userInputElement.innerHTML = '';
+        currentPastedImageBase64 = null;
+        resetLocallyStagedImage();
+        resetCopyButtonToDefault(true);
+        logger.log("Popup: User input area and associated image states cleared.");
     }
 
     function resetCopyButtonToDefault(disabled = true) {
         copyOutputButton.textContent = 'Copy Output';
         copyOutputButton.disabled = disabled;
     }
+
+    // --- View Management ---
 
     function showView(viewId) {
         logger.log(`Popup: Switching view to: ${viewId}`);
@@ -104,6 +143,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById(views.LIST).style.display = 'block';
         }
     }
+
+    // --- UI Rendering ---
 
     function renderPromptListUI() {
         logger.log('Popup: Rendering prompt list UI with', currentPrompts.length, 'prompts.');
@@ -142,6 +183,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         logger.log('Popup: Prompt list UI rendering complete.');
     }
 
+    // --- Core Logic / Event Handlers ---
+
     async function loadAndRenderPrompts() {
         logger.log("Popup: Initiating prompt loading and rendering.");
         try {
@@ -159,25 +202,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         addEditTitleElement.textContent = 'Add New Prompt';
         promptTitleInput.value = '';
         promptTextInput.value = '';
-        await clearPendingImageFromSession();
+        await clearPendingImageFromBackground();
         resetLocallyStagedImage();
         currentPastedImageBase64 = null;
         showView(views.EDIT);
         promptTitleInput.focus();
     }
 
-    function clearUserInputState() {
-        userInputElement.innerHTML = '';
-        currentPastedImageBase64 = null;
-        resetLocallyStagedImage();
-        resetCopyButtonToDefault(true);
-    }
-
     async function handleBackToListClick() {
         logger.log("Popup: Back to list button clicked from input view.");
         selectedSystemPromptText = '';
-        clearUserInputState();
-        await clearPendingImageFromSession();
+        clearUserInputFullState();
+        await clearPendingImageFromBackground();
         showView(views.LIST);
         await setupPendingImageCopyButton();
     }
@@ -185,7 +221,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function handleCancelAddEditClick() {
         logger.log("Popup: Cancel add/edit button clicked.");
         currentEditingId = null;
-        await clearPendingImageFromSession();
+        await clearPendingImageFromBackground();
         resetLocallyStagedImage();
         currentPastedImageBase64 = null;
         showView(views.LIST);
@@ -193,142 +229,169 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function handleUserInput() {
-        const hasText = userInputElement.innerText.trim().length > 0;
+        const editorText = userInputElement.innerText;
+        const hasText = editorText.trim().length > 0;
         const imageElementInEditor = userInputElement.querySelector('img');
 
         if (!imageElementInEditor && currentPastedImageBase64) {
-            logger.log('Popup: Image element visually removed from editor by user. Clearing associated data.');
+            logger.log('Popup: Image element visually removed from editor (e.g., by typing/backspace). Clearing associated advanced copy data.');
             currentPastedImageBase64 = null;
             resetLocallyStagedImage();
-            // Do not clear session pending image here automatically.
-            // User might be editing text with an image already staged for copy via session.
-            // The session image will be cleared if they perform a new copy operation with a different/no image.
         }
-        resetCopyButtonToDefault(!(hasText || imageElementInEditor)); // Enable if text OR a visual image is present
+        resetCopyButtonToDefault(!(hasText || imageElementInEditor));
     }
 
-    async function convertFileToBase64(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result); // reader.result is the data URI
-            reader.onerror = error => reject(error);
-            reader.readAsDataURL(file);
-        });
+    function insertImageIntoEditor(imgElement) {
+        userInputElement.focus(); 
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            if (userInputElement.contains(range.commonAncestorContainer) || userInputElement === range.commonAncestorContainer) {
+                range.deleteContents(); 
+                range.insertNode(imgElement);
+                range.setStartAfter(imgElement);
+                range.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                return;
+            }
+        }
+        logger.warn("Popup: Could not determine selection/range within editor for image insertion. Appending image.");
+        userInputElement.appendChild(imgElement);
     }
 
+    async function processPastedImage(imageFile) {
+        logger.log('Popup: Image file found in paste, starting processing...', { name: imageFile.name, type: imageFile.type });
+        let dataURI = null;
+        try {
+            dataURI = await convertFileToBase64(imageFile);
+            if (!dataURI || !dataURI.startsWith('data:')) {
+                logger.warn('Popup: convertFileToBase64 returned invalid or non-dataURI string. Cannot display image.');
+                alert('Pasted image data appears to be invalid. Could not display.');
+                return;
+            }
+            logger.log('Popup: Image dataURI obtained, attempting to display.', { dataURI_length: dataURI.length, preview: dataURI.substring(0,50) + "..."});
+            const img = document.createElement('img');
+            img.src = dataURI;
+            insertImageIntoEditor(img);
+            logger.log('Popup: Image displayed in user input area.');
+
+            const parsed = parseDataURI(dataURI);
+            if (parsed) {
+                const blob = base64ToBlob(parsed.base64Data, parsed.mimeType);
+                if (blob) {
+                    locallyStagedImage = { dataURI, mimeType: parsed.mimeType, blob };
+                    currentPastedImageBase64 = dataURI;
+                    logger.log('Popup: Image fully processed and staged for advanced copy.', { mime: parsed.mimeType });
+                } else {
+                    logger.warn('Popup: Failed to create blob for displayed image. Advanced copy features for this image might be limited.');
+                    alert('Image displayed, but error preparing for advanced copy (blob conversion failed).');
+                }
+            } else {
+                logger.warn('Popup: Failed to parse data URI for displayed image. Advanced copy features for this image might be limited.');
+                alert('Image displayed, but error preparing for advanced copy (data URI parsing failed).');
+            }
+        } catch (error) {
+            logger.error('Popup: General error processing pasted image file:', error.message, error.stack, { dataURIPresent: !!dataURI });
+            alert('An error occurred while processing the pasted image. If displayed, its advanced copy features might be unavailable.');
+            currentPastedImageBase64 = null;
+            resetLocallyStagedImage();
+        }
+    }
+    
     async function handlePasteOnUserInput(event) {
         logger.log('Popup: Paste event detected on user input.');
-        event.preventDefault();
-        
-        // Clear previous states before processing new paste
-        await clearPendingImageFromSession();
-        resetLocallyStagedImage();
-        currentPastedImageBase64 = null; // Crucial reset
-        const existingImgElement = userInputElement.querySelector('img');
-        if (existingImgElement) existingImgElement.remove(); // Remove any old visual image first
-        resetCopyButtonToDefault(true);
-
-        const items = (event.clipboardData || window.clipboardData).items;
+        const clipboardData = event.clipboardData || window.clipboardData;
+    
+        if (!clipboardData) {
+            logger.warn('Popup: ClipboardData not available. Allowing default browser paste action.');
+            setTimeout(() => { 
+                const imageElementInEditor = userInputElement.querySelector('img');
+                if (!imageElementInEditor && currentPastedImageBase64) {
+                    logger.log('Popup (after presumed native paste): Visual image gone. Clearing advanced copy state.');
+                    currentPastedImageBase64 = null;
+                    resetLocallyStagedImage();
+                }
+                handleUserInput();
+            }, 0);
+            return;
+        }
+    
         let imageFile = null;
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf('image') !== -1) {
-                imageFile = items[i].getAsFile();
-                break;
+        const items = clipboardData.items;
+        if (items && items.length > 0) {
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].kind === 'file' && items[i].type.startsWith('image/')) {
+                    imageFile = items[i].getAsFile();
+                    if (imageFile) {
+                        logger.log('Popup: Image file retrieved from clipboard item.', { name: imageFile.name, type: imageFile.type });
+                    } else {
+                        logger.warn('Popup: Clipboard item indicated image file, but getAsFile() returned null.');
+                    }
+                    break;
+                }
             }
         }
-
+    
         if (imageFile) {
-            logger.log('Popup: Image file found in paste.', { name: imageFile.name, type: imageFile.type });
-            let dataURI = null;
+            logger.log('Popup: Image file detected. Preventing default and handling customly.');
+            event.preventDefault();
             try {
-                dataURI = await convertFileToBase64(imageFile);
-
-                if (!dataURI || !dataURI.startsWith('data:')) {
-                    logger.warn('Popup: convertFileToBase64 returned invalid data URI.');
-                    alert('Pasted image data appears to be invalid.');
-                    handleUserInput(); // Update button state
-                    return;
+                await clearPendingImageFromBackground(); 
+                resetLocallyStagedImage();            
+                currentPastedImageBase64 = null;      
+                
+                const existingImgElement = userInputElement.querySelector('img');
+                if (existingImgElement) {
+                    logger.log("Popup: Removing existing visual image before pasting new image.");
+                    existingImgElement.remove();
                 }
-
-                logger.log('Popup: Image dataURI obtained, attempting to display.', { length: dataURI.length });
-                const img = document.createElement('img');
-                img.src = dataURI;
-
-                // Insert the image into the contenteditable div
-                const selection = window.getSelection();
-                if (selection.rangeCount > 0) {
-                    const range = selection.getRangeAt(0);
-                    if (userInputElement.contains(range.commonAncestorContainer)) {
-                        range.deleteContents();
-                        range.insertNode(img);
-                        // Move cursor after the image
-                        range.setStartAfter(img);
-                        range.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(range);
-                    } else {
-                        userInputElement.appendChild(img); // Fallback if selection is weird
-                    }
-                } else {
-                    userInputElement.appendChild(img); // Fallback if no selection
-                }
-                logger.log('Popup: Image displayed in user input area.');
-
-                // Now, try to process for advanced copying (blob, etc.)
-                const parsed = parseDataURI(dataURI);
-                if (parsed) {
-                    const blob = base64ToBlob(parsed.base64Data, parsed.mimeType);
-                    if (blob) {
-                        locallyStagedImage = { dataURI, mimeType: parsed.mimeType, blob };
-                        currentPastedImageBase64 = dataURI; // Mark that image is fully processed for copy
-                        logger.log('Popup: Image fully processed and staged for copy.', { mime: parsed.mimeType });
-                    } else {
-                        logger.warn('Popup: Failed to create blob for image. Copy features might be limited.');
-                        alert('Image displayed, but an error occurred preparing it for advanced copy (blob).');
-                        // currentPastedImageBase64 remains null, locallyStagedImage is not fully set
-                    }
-                } else {
-                    logger.warn('Popup: Failed to parse data URI for image. Copy features might be limited.');
-                    alert('Image displayed, but an error occurred preparing it for advanced copy (URI parse).');
-                    // currentPastedImageBase64 remains null, locallyStagedImage is not fully set
-                }
+                resetCopyButtonToDefault(true);
+    
+                await processPastedImage(imageFile); 
+    
             } catch (error) {
-                logger.error('Popup: General error processing pasted image:', error.message, error.stack);
-                alert('An error occurred while processing the pasted image.');
-                // Ensure states are reset if error occurs after display but before full processing
-                currentPastedImageBase64 = null;
-                resetLocallyStagedImage();
-                // Remove the img if it was added but processing failed catastrophically
-                const potentiallyAddedImg = userInputElement.querySelector('img');
-                if (potentiallyAddedImg && potentiallyAddedImg.src === dataURI) {
-                    potentiallyAddedImg.remove();
+                logger.error('Popup: Error during custom image paste handling:', error.message, error.stack);
+                alert("An error occurred during image paste. Check console.");
+            } finally {
+                handleUserInput();
+            }
+        } else {
+            logger.log('Popup: No image file detected. Allowing default browser paste for text/HTML.');
+            await clearPendingImageFromBackground(); 
+            
+            const imageWasVisuallyPresent = userInputElement.querySelector('img');
+            if (imageWasVisuallyPresent && currentPastedImageBase64) { 
+                 logger.log('Popup (before native non-image paste): Processed visual image was present. Clearing its advanced copy state.');
+                 currentPastedImageBase64 = null;
+                 resetLocallyStagedImage();
+            }
+    
+            setTimeout(() => {
+                logger.log('Popup (after native non-image paste): Native paste should have completed. Updating UI/internal state.');
+                const imageIsNowPresent = userInputElement.querySelector('img');
+                if (imageIsNowPresent) {
+                    if (!currentPastedImageBase64) { 
+                        logger.log('Popup (after native non-image paste): A visual image is present but not processed by us for advanced copy.');
+                    }
+                } else { 
+                    if (currentPastedImageBase64) {
+                        logger.log('Popup (after native non-image paste): Visual image removed by paste. Clearing advanced copy state.');
+                        currentPastedImageBase64 = null;
+                        resetLocallyStagedImage();
+                    }
                 }
-            }
-        } else { // Not an image file
-            const textData = (event.clipboardData || window.clipboardData).getData('text/plain');
-            if (textData) {
-                document.execCommand('insertText', false, textData);
-                logger.log('Popup: Text data pasted into user input.');
-            } else {
-                logger.log('Popup: No image or plain text found in pasted items.');
-            }
+                handleUserInput(); 
+            }, 0);
         }
-        handleUserInput(); // Update button state based on content
-    }
-
-    function escapeHtml(unsafeText) {
-        const div = document.createElement('div');
-        div.innerText = unsafeText;
-        return div.innerHTML;
     }
 
     async function handleCopyOutputClick() {
-        const userHtmlContent = userInputElement.innerHTML; // Includes <img src="data:..."> if image is displayed
+        const userHtmlContent = userInputElement.innerHTML; 
         const userTextContent = userInputElement.innerText.trim();
         const hasText = userTextContent.length > 0;
         const imageIsVisuallyPresent = !!userInputElement.querySelector('img');
-        // currentPastedImageBase64 is only true if image is VISUAL AND FULLY PROCESSED (blob created)
-        const canDoAdvancedImageCopy = !!currentPastedImageBase64 && !!locallyStagedImage.blob;
+        const canDoAdvancedImageCopy = !!currentPastedImageBase64 && !!locallyStagedImage.blob && !!locallyStagedImage.dataURI;
 
         if (!hasText && !imageIsVisuallyPresent) {
             logger.warn("Popup: Copy failed. No content (text or visual image)."); return;
@@ -337,14 +400,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             logger.warn("Popup: Copy failed. No system prompt selected."); return;
         }
 
-        logger.log("Popup: Initiating copy (Step 1: Text + Embedded Image/Placeholder).");
+        logger.log("Popup: Initiating copy (Step 1: Text + Embedded Image/Placeholder).", { canDoAdvancedImageCopy });
         const htmlOutput = `<div><p><strong>System Prompt:</strong></p><pre style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(selectedSystemPromptText)}</pre><hr><p><strong>User Input:</strong></p><div>${userHtmlContent}</div></div>`;
         let plainTextOutput = `[[[system prompt begin]]]\n\n${selectedSystemPromptText}\n\n[[[system prompt end]]]`;
         if (hasText) {
             plainTextOutput += `\n\n\n[[[user input text begin]]]\n\n${userTextContent}\n\n[[[user input text end]]]`;
         }
         if (imageIsVisuallyPresent) {
-            plainTextOutput += `\n\n\n[[[user input image placeholder]]]\n\n[Image was present. ${canDoAdvancedImageCopy ? "Re-open extension to copy image separately." : "Image could not be fully processed for separate copy."}]\n\n[[[user input image placeholder end]]]`;
+            plainTextOutput += `\n\n\n[[[user input]]]\n\n[Image was present. ${canDoAdvancedImageCopy ? "User pasted an image, check your assets/artifacts" : "Image could not be fully processed for separate copy."}]\n\n[[[user input end]]]`;
         }
 
         const clipboardPayload = {
@@ -354,38 +417,44 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         try {
             await navigator.clipboard.write([new ClipboardItem(clipboardPayload)]);
-            logger.log("Popup: Step 1 (Text + Embedded/Placeholder) copied.");
+            logger.log("Popup: Step 1 (Text + Embedded/Placeholder) copied to clipboard.");
             let message = 'Text Copied!';
 
             if (canDoAdvancedImageCopy) {
-                const pendingImageData = {
-                    dataURI: locallyStagedImage.dataURI,
-                    mimeType: locallyStagedImage.mimeType,
-                    associatedPromptTitle: selectedPromptTitleElement.textContent || "Selected Prompt"
-                };
-                const estimatedSize = JSON.stringify(pendingImageData).length; // Approx
-                if (estimatedSize > 7500) { // Check against typical 8KB limit for item in chrome.storage
-                    logger.warn(`Popup: Pending image data too large for session storage (${estimatedSize} bytes). Separate image copy will not be available.`);
-                    message = "Text Copied! (Image too large for session store)";
-                } else {
-                    await chrome.storage.session.set({ [PENDING_IMAGE_STORAGE_KEY]: pendingImageData });
-                    if (chrome.runtime.lastError) {
-                        logger.error("Popup: Error saving pending image to session:", chrome.runtime.lastError.message);
-                        message = "Text Copied! (Error saving image for 2nd step)";
-                    } else {
-                        logger.log("Popup: Image data saved to session for potential Step 2 copy.");
+                logger.log("Popup: Attempting to store image in background for 2-step copy.", { dataURI_length: locallyStagedImage.dataURI.length });
+                try {
+                    const response = await chrome.runtime.sendMessage({
+                        action: 'storeImageForCopy',
+                        dataURI: locallyStagedImage.dataURI,
+                        mimeType: locallyStagedImage.mimeType,
+                        associatedPromptTitle: selectedPromptTitleElement.textContent || "Selected Prompt"
+                    });
+
+                    if (response && response.success) {
+                        logger.log("Popup: Image successfully sent to background SW for storage.");
                         message = 'Text Copied! (Reopen for image)';
+                    } else {
+                        logger.error("Popup: Failed to store image in background SW.", response);
+                        message = "Text Copied! (Error storing image for 2-step)";
+                        await clearPendingImageFromBackground(); // Ensure it's cleared if storage failed
                     }
+                } catch (error) {
+                    logger.error("Popup: Error sending message to background SW to store image:", error.message, error.stack);
+                    message = "Text Copied! (Error contacting background for 2-step image)";
+                    await clearPendingImageFromBackground();
                 }
             } else if (imageIsVisuallyPresent) {
-                 message = 'Text Copied! (Image not fully processed for 2nd step)';
+                 message = 'Text Copied! (Image not fully processed for 2-step)';
+                 await clearPendingImageFromBackground(); // No advanced copy, so clear any stale background data
+            } else {
+                 await clearPendingImageFromBackground(); // No image at all, clear background
             }
             
             copyOutputButton.textContent = message;
             copyOutputButton.disabled = true;
-            setTimeout(() => window.close(), 1500); // Longer timeout to read message
+            setTimeout(() => window.close(), 1500);
         } catch (error) {
-            logger.error('Popup: Failed to copy (Step 1):', error.message, error.stack);
+            logger.error('Popup: Failed to copy (Step 1 - text/html content):', error.message, error.stack);
             copyOutputButton.textContent = 'Error Copying Text!';
             setTimeout(() => resetCopyButtonToDefault(!(hasText || imageIsVisuallyPresent)), 2000);
         }
@@ -396,11 +465,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (existingButton) existingButton.remove();
 
         try {
-            const result = await chrome.storage.session.get(PENDING_IMAGE_STORAGE_KEY);
-            const pendingData = result[PENDING_IMAGE_STORAGE_KEY];
+            logger.log("Popup: Requesting pending image data from background SW.");
+            const response = await chrome.runtime.sendMessage({ action: 'retrieveImageForCopy' });
+            
+            if (chrome.runtime.lastError) {
+                 logger.error("Popup: Error sending/receiving 'retrieveImageForCopy' message:", chrome.runtime.lastError.message);
+                 return;
+            }
 
-            if (pendingData && pendingData.dataURI && pendingData.mimeType) {
-                logger.log("Popup: Pending image data found in session.", pendingData.associatedPromptTitle);
+            if (response && response.success && response.data) {
+                const pendingData = response.data;
+                logger.log("Popup: Pending image data received from background SW.", {title: pendingData.associatedPromptTitle, dataURI_preview: pendingData.dataURI.substring(0,50) + "..."});
+                
                 const button = document.createElement('button');
                 button.id = 'copy-pending-image-btn';
                 button.textContent = `Copy Image for '${pendingData.associatedPromptTitle}'`;
@@ -418,41 +494,48 @@ document.addEventListener('DOMContentLoaded', async () => {
                         if (blob) {
                             try {
                                 await navigator.clipboard.write([new ClipboardItem({ [parsed.mimeType]: blob })]);
-                                logger.log("Popup: Pending image blob copied successfully.");
+                                logger.log("Popup: Pending image blob copied successfully to clipboard.");
                                 button.textContent = 'Image Copied to Clipboard!';
                                 button.disabled = true;
-                                await clearPendingImageFromSession();
-                                setTimeout(() => { try {button.remove();} catch(e){/* already gone */} }, 2000);
+                                await clearPendingImageFromBackground(); // Crucial: clear after successful copy
+                                setTimeout(() => { try {button.remove();} catch(e){/* no-op */} }, 2000);
                             } catch (error) {
                                 logger.error("Popup: Error copying pending image blob:", error.message, error.stack);
                                 button.textContent = 'Error Copying Image!';
                             }
                         } else {
                             button.textContent = 'Error Processing Stored Image!';
-                            logger.error("Popup: Failed to create blob for pending image.");
+                            logger.error("Popup: Failed to create blob for pending image from background data.");
                         }
                     } else {
                         button.textContent = 'Error Parsing Stored Image Data!';
-                        logger.error("Popup: Failed to parse dataURI for pending image.");
+                        logger.error("Popup: Failed to parse dataURI for pending image from background data.");
                     }
                 };
                 promptListView.insertBefore(button, promptListView.firstChild);
             } else {
-                logger.log("Popup: No pending image data found in session or data invalid.");
+                logger.log("Popup: No valid pending image data received from background SW or retrieval failed.", response);
             }
         } catch (error) {
-            logger.error("Popup: Error accessing session storage for pending image:", error.message, error.stack);
+            logger.error("Popup: Exception trying to retrieve image from background SW:", error.message, error.stack);
+            if (error.message.includes("Could not establish connection") || error.message.includes("Receiving end does not exist")) {
+                 logger.warn("Popup: Service worker might be inactive. The 'Copy Pending Image' button will not appear.");
+            }
         }
     }
 
     async function handleSavePromptClick() {
         const title = promptTitleInput.value.trim();
         const text = promptTextInput.value.trim();
-        if (!title || !text) { alert("Title and text cannot be empty."); return; }
-        currentEditingId = currentEditingId || Date.now().toString(); // Ensure ID if new
+        if (!title || !text) { 
+            alert("Title and prompt text cannot be empty."); 
+            return; 
+        }
+        const promptToSave = { id: currentEditingId || Date.now().toString(), title, text };
+        logger.log(`Popup: Saving prompt ID: ${promptToSave.id}, Title: "${title}"`);
         try {
-            await savePrompt({ id: currentEditingId, title, text });
-            currentEditingId = null; // Reset after save
+            await savePrompt(promptToSave);
+            currentEditingId = null;
             await loadAndRenderPrompts();
             showView(views.LIST);
             await setupPendingImageCopyButton();
@@ -463,41 +546,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function handleSelectPrompt(promptId) {
-        const selected = currentPrompts.find(p => p.id === promptId);
-        if (!selected) { alert("Error: Prompt not found."); return; }
-        logger.log("Popup: Selected prompt ID:", promptId, " Title:", selected.title);
-        selectedSystemPromptText = selected.text;
-        selectedPromptTitleElement.textContent = selected.title;
-        
-        clearUserInputState(); 
-        await clearPendingImageFromSession(); 
-
+        const selectedPrompt = currentPrompts.find(p => p.id === promptId);
+        if (!selectedPrompt) { 
+            logger.error("Popup: Selected prompt not found with ID:", promptId);
+            alert("Error: Prompt not found."); 
+            return; 
+        }
+        logger.log("Popup: Selected prompt ID:", promptId, " Title:", selectedPrompt.title);
+        selectedSystemPromptText = selectedPrompt.text;
+        selectedPromptTitleElement.textContent = selectedPrompt.title;
+        clearUserInputFullState();
+        await clearPendingImageFromBackground(); 
         showView(views.INPUT);
         userInputElement.focus();
     }
 
     async function handleEditPrompt(promptId) {
         const promptToEdit = currentPrompts.find(p => p.id === promptId);
-        if (!promptToEdit) { alert("Error: Prompt to edit not found."); return; }
+        if (!promptToEdit) {
+            logger.error("Popup: Prompt to edit not found with ID:", promptId);
+            alert("Error: Prompt to edit not found."); 
+            return; 
+        }
         logger.log("Popup: Edit icon clicked for prompt ID:", promptId);
         currentEditingId = promptId;
         addEditTitleElement.textContent = 'Edit Prompt';
         promptTitleInput.value = promptToEdit.title;
         promptTextInput.value = promptToEdit.text;
-        
-        await clearPendingImageFromSession();
+        await clearPendingImageFromBackground(); 
         resetLocallyStagedImage();
         currentPastedImageBase64 = null; 
-
         showView(views.EDIT);
         promptTitleInput.focus();
     }
 
     async function handleDeletePrompt(promptId, promptTitle) {
         if (confirm(`Are you sure you want to delete the prompt "${promptTitle}"?`)) {
+            logger.log(`Popup: Deleting prompt ID: ${promptId}, Title: "${promptTitle}"`);
             try {
                 await deletePrompt(promptId);
-                await clearPendingImageFromSession(); // Clear if a delete happens
+                await clearPendingImageFromBackground(); 
                 await loadAndRenderPrompts();
                 await setupPendingImageCopyButton();
             } catch (error) {
@@ -518,8 +606,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         savePromptButton.addEventListener('click', handleSavePromptClick);
         
         await loadAndRenderPrompts();
-        await setupPendingImageCopyButton();
-
+        await setupPendingImageCopyButton(); 
+        
         showView(views.LIST);
         logger.log("Popup: Initialization complete.");
     }
