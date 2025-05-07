@@ -1,20 +1,70 @@
-- create a backup/restore button, backup takes a dump of prompts into an xml/json file, restore takes said file and restores all prompts
+Okay, I understand. It's crucial that the basic functionality of pasting an image into the extension works flawlessly before we can refine the two-step copy. The fact that it's completely broken now is a significant regression, and I apologize for that.
 
-- Investigate improving visual image rendering in AI platform input fields (e.g., Claude, Google AI Studio) when pasting content from the extension.
-  Current Behavior:
-    - Extension copies content as 'text/html' (with embedded <img src="data:...">) and 'text/plain' (with image as base64 string).
-    - MS Word correctly renders the image visually from 'text/html'.
-    - AI platforms (Claude, Google AI Studio) currently process the 'text/plain' content, displaying the base64 string of the image rather than rendering the visual image in their input fields. They *do* receive the image data and all text.
-  Desired Behavior:
-    - AI platforms, if their UI supports it, should ideally render the image visually from the 'text/html' content, similar to how they handle a direct image paste (e.g., from a file or screenshot tool).
-  Context & Attempts So Far:
-    1. Initial: Only base64 in plain text (bad for Word).
-    2. With Direct Image Blob: Included 'text/html', 'text/plain', AND a direct 'image/*' blob (e.g., 'image/png'). This caused some AI platforms (like Google AI) to *only* take the image blob, losing the text.
-    3. Current: 'text/html' (with embedded <img> data: URL) and 'text/plain' (with base64 string). This ensures text and image data are always transferred but visual rendering in AI input fields is inconsistent.
-  Observation:
-    - AI platforms render images visually when an image is pasted directly (likely an 'image/*' blob type is primary on the clipboard). Their handling of pasted 'text/html' containing an embedded '<img>' tag with a 'data:' URL seems different.
-  Challenge:
-    - Standard clipboard APIs make it difficult to force a specific interpretation on the receiving application or to perfectly replicate the "direct image file paste" event flow when originating from a composite HTML/text content. The receiving application's paste handling logic is the primary determinant.
-  Potential Avenues (for future exploration, may not be feasible):
-    - Research if any specific HTML structuring or clipboard metadata could encourage AI platforms to better parse and render embedded images from 'text/html'.
-    - Investigate if 'contenteditable' `input` event workarounds or alternative clipboard APIs (if any emerge) could offer more control (low probability).
+Let's create a detailed todo.txt entry reflecting our efforts and the current state.
+
+todo.txt Update:
+
+Investigate and fix critical regression: Pasting an image into the extension's userInputElement currently fails (image does not appear visually). This is the top priority.
+
+Likely cause: Changes in handlePasteOnUserInput in the last iteration (related to pre-emptive checks or error handling before DOM manipulation for image display).
+
+Action: Review handlePasteOnUserInput to ensure image display (img.src = dataURI; and DOM insertion) happens immediately upon successful convertFileToBase64 and before more complex processing for copy staging. Subsequent failures in blob creation or staging should alert the user but not prevent the initial visual display.
+
+Re-evaluate and refine the two-step image copy workflow using chrome.storage.session (once image pasting is fixed):
+
+User Goal:
+
+Paste text and/or an image into the extension's input area.
+
+Click a "Copy Output" button.
+
+This first copy action should place text content (system prompt + user text) on the clipboard. For broad compatibility (e.g., MS Word), this should also include the image embedded as a data URI within an HTML representation. For AI platforms that misinterpret embedded image data in plain text, the plain text version should use a placeholder for the image (e.g., "[Image was present...]").
+
+If an image was part of the input and successfully processed, its data (dataURI, mimeType) should be temporarily stored (e.g., in chrome.storage.session), and the popup should inform the user (e.g., "Text Copied! Reopen extension to copy image."). The popup then closes.
+
+User pastes the text content into the target AI platform.
+
+User reopens the extension popup.
+
+A distinct button (e.g., "Copy Image for 'Prompt Title'") should be visible if a processed image was stored in the session.
+
+Clicking this second button copies only the image (as an image/* blob) to the clipboard.
+
+User can then paste the image into the AI platform.
+
+Previous Attempts & Problems:
+
+Initial (Pre-session): Direct multi-MIME type copy (text/plain, text/html with embedded image, and image/* blob) in one step.
+
+Problem: Some AI platforms prioritized the image/* blob and discarded the text.
+
+Two-step copy, popup stays open:
+
+Step 1: Copy text (+ HTML embedded image, + plain text with base64 image/placeholder). Button changes to "Copy Image?".
+
+Step 2: User clicks again for image-only blob copy.
+
+Problem: Popup closes upon losing focus (e.g., when user clicks to paste into AI platform), breaking the second step. Garbled text in AI Studio if full data URI was included in text/plain.
+
+Two-step copy, chrome.storage.session (current path, but with image paste regression):
+
+Step 1: Copy text (+ HTML embedded image, + plain text with placeholder for image). Image data stored in chrome.storage.session. Popup closes, informing user to reopen for image.
+
+Step 2: User reopens popup. New button appears to copy stored image as a blob.
+
+Current Problem: Critical regression where pasting the image into the extension's input area itself is not working.
+
+Key considerations for chrome.storage.session approach:
+
+Robustness of storing/retrieving image data (dataURI, mimeType).
+
+Graceful handling of chrome.storage.session size limits (QUOTA_BYTES_PER_ITEM), alerting user if image is too large for this method.
+
+Clear UI indication for the "Copy Pending Image" button.
+
+Reliable cleanup of stale pending image data from session storage upon new pastes, prompt selections, edits, or successful copying of the pending image.
+
+Create a backup/restore button, backup takes a dump of prompts into an xml/json file, restore takes said file and restores all prompts.
+(This is the original item from todo.txt, kept for completeness)
+
+This covers the current situation accurately. The immediate next step, when we resume, must be to fix the image pasting regression in popup.js.
