@@ -1,1 +1,20 @@
 - create a backup/restore button, backup takes a dump of prompts into an xml/json file, restore takes said file and restores all prompts
+
+- Investigate improving visual image rendering in AI platform input fields (e.g., Claude, Google AI Studio) when pasting content from the extension.
+  Current Behavior:
+    - Extension copies content as 'text/html' (with embedded <img src="data:...">) and 'text/plain' (with image as base64 string).
+    - MS Word correctly renders the image visually from 'text/html'.
+    - AI platforms (Claude, Google AI Studio) currently process the 'text/plain' content, displaying the base64 string of the image rather than rendering the visual image in their input fields. They *do* receive the image data and all text.
+  Desired Behavior:
+    - AI platforms, if their UI supports it, should ideally render the image visually from the 'text/html' content, similar to how they handle a direct image paste (e.g., from a file or screenshot tool).
+  Context & Attempts So Far:
+    1. Initial: Only base64 in plain text (bad for Word).
+    2. With Direct Image Blob: Included 'text/html', 'text/plain', AND a direct 'image/*' blob (e.g., 'image/png'). This caused some AI platforms (like Google AI) to *only* take the image blob, losing the text.
+    3. Current: 'text/html' (with embedded <img> data: URL) and 'text/plain' (with base64 string). This ensures text and image data are always transferred but visual rendering in AI input fields is inconsistent.
+  Observation:
+    - AI platforms render images visually when an image is pasted directly (likely an 'image/*' blob type is primary on the clipboard). Their handling of pasted 'text/html' containing an embedded '<img>' tag with a 'data:' URL seems different.
+  Challenge:
+    - Standard clipboard APIs make it difficult to force a specific interpretation on the receiving application or to perfectly replicate the "direct image file paste" event flow when originating from a composite HTML/text content. The receiving application's paste handling logic is the primary determinant.
+  Potential Avenues (for future exploration, may not be feasible):
+    - Research if any specific HTML structuring or clipboard metadata could encourage AI platforms to better parse and render embedded images from 'text/html'.
+    - Investigate if 'contenteditable' `input` event workarounds or alternative clipboard APIs (if any emerge) could offer more control (low probability).
