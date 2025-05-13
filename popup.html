@@ -12,6 +12,11 @@
         <!-- View 1: List of Prompts (Default View) -->
         <div id="prompt-list-view">
             <h2>My Prompts</h2>
+            <div id="import-export-controls" style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #eee;">
+                <button id="export-prompts-btn" title="Export all prompts to a JSON file">Export Prompts</button>
+                <button id="import-prompts-btn" title="Import prompts from a JSON file">Import Prompts</button>
+                <input type="file" id="import-file-input" accept=".json" style="display: none;">
+            </div>
             <ul id="prompt-list">
                 <!-- Prompt list items will be dynamically added here -->
             </ul>
@@ -42,6 +47,8 @@
 
     <script src="logger.js"></script>
     <script src="storageManager.js"></script>
+    <!-- uiManager.js needs to be loaded before popup.js uses it -->
+    <script src="uiManager.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>
