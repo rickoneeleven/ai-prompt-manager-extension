@@ -137,9 +137,11 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = VersionChecker;
 }
 
-// Global test function for console debugging
-window.testVersionChecker = function() {
-  console.log('[DEBUG] Manual version check triggered from console');
-  const versionChecker = new VersionChecker('ai-prompt-manager');
-  versionChecker.forceCheckVersion();
-};
+// Global test function for console debugging (only in popup context)
+if (typeof window !== 'undefined') {
+  window.testVersionChecker = function() {
+    console.log('[DEBUG] Manual version check triggered from console');
+    const versionChecker = new VersionChecker('ai-prompt-manager');
+    versionChecker.forceCheckVersion();
+  };
+}
