@@ -9,13 +9,13 @@ console.log('[BackgroundSW DEBUG] Version checker initialized');
 chrome.runtime.onStartup.addListener(() => {
   console.log('[BackgroundSW] Service worker started (onStartup).');
   console.log('[BackgroundSW DEBUG] Triggering version check from onStartup');
-  versionChecker.checkVersion();
+  versionChecker.forceCheckVersion();
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('[BackgroundSW] Service worker installed or updated:', details.reason);
   console.log('[BackgroundSW DEBUG] Triggering version check from onInstalled');
-  versionChecker.checkVersion();
+  versionChecker.forceCheckVersion();
 });
 
 let pendingImageForCopy = null;
