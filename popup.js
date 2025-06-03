@@ -671,6 +671,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function initializeVersionStatus() {
         const versionChecker = new VersionChecker('ai-prompt-manager');
         
+        // Auto-check if it's been >24 hours since last check
+        console.log('[Popup DEBUG] Checking if auto-check needed on popup open');
+        if (await versionChecker.shouldCheck()) {
+            console.log('[Popup DEBUG] Auto-triggering version check (>24 hours since last check)');
+            await versionChecker.checkVersion();
+        } else {
+            console.log('[Popup DEBUG] Skipping auto-check (checked recently)');
+        }
+        
         // Set up check now button
         const checkVersionBtn = document.getElementById('check-version-btn');
         if (checkVersionBtn) {
