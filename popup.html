@@ -9,6 +9,18 @@
 <body>
     <div id="app-container">
 
+        <!-- Version Status Bar -->
+        <div id="version-status-bar" style="background: #f5f5f5; padding: 8px; margin-bottom: 10px; border-radius: 4px; font-size: 12px; border-left: 3px solid #ccc;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span id="version-info">Version: <span id="current-version">--</span></span>
+                <button id="check-version-btn" style="font-size: 11px; padding: 2px 6px;" title="Check for updates now">Check</button>
+            </div>
+            <div id="version-details" style="margin-top: 4px; color: #666;">
+                <div>Latest: <span id="latest-version">--</span></div>
+                <div>Last checked: <span id="last-checked">Never</span></div>
+            </div>
+        </div>
+
         <!-- View 1: List of Prompts (Default View) -->
         <div id="prompt-list-view">
             <h2>My Prompts</h2>

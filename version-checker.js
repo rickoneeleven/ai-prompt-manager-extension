@@ -56,6 +56,11 @@ class VersionChecker {
       // Store last check time
       await this.updateLastCheckTime();
       
+      // Store latest version info
+      await chrome.storage.local.set({
+        [`latestVersion_${this.extensionName}`]: latestVersion
+      });
+      
       // Compare versions
       if (this.isOutdated(currentVersion, latestVersion)) {
         console.warn(`[VersionChecker] ${this.extensionName} is outdated! Current: ${currentVersion}, Latest: ${latestVersion}`);
@@ -89,8 +94,10 @@ class VersionChecker {
   }
 
   async updateLastCheckTime() {
+    const now = Date.now();
     await chrome.storage.local.set({
-      [this.lastCheckKey]: Date.now()
+      [this.lastCheckKey]: now,
+      [`lastCheckTime_${this.extensionName}`]: now
     });
   }
 
@@ -129,6 +136,49 @@ class VersionChecker {
     this.checkIntervalHours = 0; // Bypass rate limiting
     await this.checkVersion();
     this.checkIntervalHours = originalCheckInterval; // Restore original interval
+  }
+
+  // Get version status for UI display
+  async getVersionStatus() {
+    const manifest = chrome.runtime.getManifest();
+    const currentVersion = manifest.version;
+    
+    const result = await chrome.storage.local.get([
+      `lastCheckTime_${this.extensionName}`,
+      `latestVersion_${this.extensionName}`
+    ]);
+    
+    const lastCheckTime = result[`lastCheckTime_${this.extensionName}`];
+    const latestVersion = result[`latestVersion_${this.extensionName}`] || 'Unknown';
+    
+    let lastCheckedText = 'Never';
+    if (lastCheckTime) {
+      const now = new Date();
+      const checkTime = new Date(lastCheckTime);
+      const diffMinutes = Math.floor((now - checkTime) / (1000 * 60));
+      
+      if (diffMinutes < 1) {
+        lastCheckedText = 'Just now';
+      } else if (diffMinutes < 60) {
+        lastCheckedText = `${diffMinutes}m ago`;
+      } else if (diffMinutes < 1440) {
+        const hours = Math.floor(diffMinutes / 60);
+        lastCheckedText = `${hours}h ago`;
+      } else {
+        const days = Math.floor(diffMinutes / 1440);
+        lastCheckedText = `${days}d ago`;
+      }
+    }
+    
+    const isOutdated = latestVersion !== 'Unknown' && this.isOutdated(currentVersion, latestVersion);
+    
+    return {
+      currentVersion,
+      latestVersion,
+      lastCheckedText,
+      isOutdated,
+      lastCheckTime
+    };
   }
 }
 

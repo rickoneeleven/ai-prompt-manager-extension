@@ -8,6 +8,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     UIManager.init(); // Initialize UIManager to cache DOM elements
 
+    // Initialize version status display
+    await initializeVersionStatus();
+
     // Local state variables
     let currentPrompts = [];
     let selectedSystemPromptText = '';
@@ -662,6 +665,64 @@ document.addEventListener('DOMContentLoaded', async () => {
         await refreshPromptListAndDynamicButtons();
         UIManager.showView(UIManager.VIEWS.LIST);
         logger.log("Popup: Initialization complete.");
+    }
+
+    // Version status functions
+    async function initializeVersionStatus() {
+        const versionChecker = new VersionChecker('ai-prompt-manager');
+        
+        // Set up check now button
+        const checkVersionBtn = document.getElementById('check-version-btn');
+        if (checkVersionBtn) {
+            checkVersionBtn.addEventListener('click', async () => {
+                checkVersionBtn.disabled = true;
+                checkVersionBtn.textContent = 'Checking...';
+                
+                await versionChecker.forceCheckVersion();
+                await updateVersionStatusDisplay();
+                
+                checkVersionBtn.disabled = false;
+                checkVersionBtn.textContent = 'Check';
+            });
+        }
+        
+        // Initial display update
+        await updateVersionStatusDisplay();
+        
+        // Update display every 30 seconds to refresh "X minutes ago" text
+        setInterval(updateVersionStatusDisplay, 30000);
+    }
+    
+    async function updateVersionStatusDisplay() {
+        const versionChecker = new VersionChecker('ai-prompt-manager');
+        const status = await versionChecker.getVersionStatus();
+        
+        // Update current version
+        const currentVersionEl = document.getElementById('current-version');
+        if (currentVersionEl) currentVersionEl.textContent = status.currentVersion;
+        
+        // Update latest version
+        const latestVersionEl = document.getElementById('latest-version');
+        if (latestVersionEl) latestVersionEl.textContent = status.latestVersion;
+        
+        // Update last checked time
+        const lastCheckedEl = document.getElementById('last-checked');
+        if (lastCheckedEl) lastCheckedEl.textContent = status.lastCheckedText;
+        
+        // Update status bar color based on update availability
+        const statusBar = document.getElementById('version-status-bar');
+        if (statusBar) {
+            if (status.isOutdated) {
+                statusBar.style.borderLeftColor = '#ff6b6b';
+                statusBar.style.backgroundColor = '#ffe0e0';
+            } else if (status.latestVersion !== 'Unknown') {
+                statusBar.style.borderLeftColor = '#4CAF50';
+                statusBar.style.backgroundColor = '#f0f8f0';
+            } else {
+                statusBar.style.borderLeftColor = '#ccc';
+                statusBar.style.backgroundColor = '#f5f5f5';
+            }
+        }
     }
 
     // Start the popup
