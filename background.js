@@ -3,16 +3,18 @@ importScripts('version-checker.js');
 
 // Initialize version checker
 const versionChecker = new VersionChecker('ai-prompt-manager');
+console.log('[BackgroundSW DEBUG] Version checker initialized');
 
-// Check version on startup
+// Check version on startup/install
 chrome.runtime.onStartup.addListener(() => {
   console.log('[BackgroundSW] Service worker started (onStartup).');
+  console.log('[BackgroundSW DEBUG] Triggering version check from onStartup');
   versionChecker.checkVersion();
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('[BackgroundSW] Service worker installed or updated:', details.reason);
-  // Check version on install/update
+  console.log('[BackgroundSW DEBUG] Triggering version check from onInstalled');
   versionChecker.checkVersion();
 });
 
@@ -54,13 +56,4 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Fallback for unknown actions
   sendResponse({ success: false, message: 'Unknown action.' });
   return true; 
-});
-
-// Optional: Log when the service worker starts (e.g., on install/update or wake)
-chrome.runtime.onStartup.addListener(() => {
-  console.log('[BackgroundSW] Service worker started (onStartup).');
-});
-
-chrome.runtime.onInstalled.addListener((details) => {
-  console.log('[BackgroundSW] Service worker installed or updated:', details.reason);
 });
