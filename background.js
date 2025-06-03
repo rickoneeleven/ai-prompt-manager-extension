@@ -1,4 +1,21 @@
-// background.js
+// Import version checker
+importScripts('version-checker.js');
+
+// Initialize version checker
+const versionChecker = new VersionChecker('ai-prompt-manager');
+
+// Check version on startup
+chrome.runtime.onStartup.addListener(() => {
+  console.log('[BackgroundSW] Service worker started (onStartup).');
+  versionChecker.checkVersion();
+});
+
+chrome.runtime.onInstalled.addListener((details) => {
+  console.log('[BackgroundSW] Service worker installed or updated:', details.reason);
+  // Check version on install/update
+  versionChecker.checkVersion();
+});
+
 let pendingImageForCopy = null;
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
