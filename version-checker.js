@@ -102,7 +102,14 @@ class VersionChecker {
   }
 
   isOutdated(current, latest) {
-    // Simple version comparison (assumes semantic versioning)
+    // Handle both timestamp versions (YY.MM.DD.HHMM) and semantic versions (1.0.0)
+    
+    // If either version looks like a timestamp (starts with 2-digit year), use string comparison
+    if (this.isTimestampVersion(current) || this.isTimestampVersion(latest)) {
+      return current !== latest && latest > current; // String comparison works for timestamps
+    }
+    
+    // Otherwise use semantic versioning comparison
     const currentParts = current.split('.').map(Number);
     const latestParts = latest.split('.').map(Number);
     
@@ -115,6 +122,11 @@ class VersionChecker {
     }
     
     return false;
+  }
+
+  isTimestampVersion(version) {
+    // Check if version matches timestamp format: YY.MM.DD.HHMM
+    return /^\d{2}\.\d{2}\.\d{2}\.\d{4}$/.test(version);
   }
 
   showUpdateNotification(currentVersion, latestVersion) {
