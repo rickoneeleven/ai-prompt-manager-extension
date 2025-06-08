@@ -739,7 +739,4 @@ document.addEventListener('DOMContentLoaded', async () => {
         logger.error("Popup: Uncaught error during initialization:", err.message, err.stack);
         alert("A critical error occurred during popup initialization. Please check the console.");
     });
-});/ /   T e s t   a u t o m a t i o n   w i t h   t i m e s t a m p   v e r s i o n i n g  
- 
-// Test complete automation pipeline with PAT fix
-// Test PAT automation fix
+});
