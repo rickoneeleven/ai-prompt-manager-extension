@@ -1,1 +1,2 @@
 Test commit 1 - verifying no merge conflicts
+Test commit 2 - double checking workflow stability
