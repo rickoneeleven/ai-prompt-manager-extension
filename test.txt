@@ -1,2 +1,3 @@
 Test commit 1 - verifying no merge conflicts
-Test commit 2 - double checking workflow stability
+Test commit 2 - double checking workflow stability  
+Test commit 3 - testing fixed pre-push hook (no more amend conflicts)
