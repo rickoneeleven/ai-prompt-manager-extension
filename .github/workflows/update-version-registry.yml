@@ -24,7 +24,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: rickoneeleven/extension-versions
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.REGISTRY_PAT }}
         path: registry
         
     - name: Update versions.json
