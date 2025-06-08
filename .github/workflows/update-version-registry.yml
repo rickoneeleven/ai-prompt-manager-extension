@@ -1,0 +1,57 @@
+name: Update Version Registry
+
+on:
+  push:
+    branches: [ main, master ]
+    paths: [ 'manifest.json' ]
+
+jobs:
+  update-registry:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout extension repo
+      uses: actions/checkout@v4
+      
+    - name: Extract version from manifest
+      id: version
+      run: |
+        VERSION=$(node -p "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')).version")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Extension version: $VERSION"
+        
+    - name: Checkout version registry
+      uses: actions/checkout@v4
+      with:
+        repository: rickoneeleven/extension-versions
+        token: ${{ secrets.GITHUB_TOKEN }}
+        path: registry
+        
+    - name: Update versions.json
+      run: |
+        cd registry
+        
+        # Read current versions.json
+        VERSIONS=$(cat versions.json)
+        
+        # Update the extension version using Node.js
+        node -e "
+          const fs = require('fs');
+          const versions = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
+          versions['ai-prompt-manager'] = '${{ steps.version.outputs.version }}';
+          fs.writeFileSync('versions.json', JSON.stringify(versions, null, 2) + '\n');
+          console.log('Updated ai-prompt-manager to version ${{ steps.version.outputs.version }}');
+        "
+        
+        # Show the updated file
+        echo "Updated versions.json:"
+        cat versions.json
+        
+    - name: Commit registry update
+      run: |
+        cd registry
+        git config user.name "Extension Version Bot"
+        git config user.email "action@github.com"
+        git add versions.json
+        git commit -m "Update ai-prompt-manager to version ${{ steps.version.outputs.version }}" || exit 0
+        git push
