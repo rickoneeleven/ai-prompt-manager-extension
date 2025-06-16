@@ -6,8 +6,7 @@
   "permissions": [
     "storage",
     "clipboardWrite",
-    "notifications",
-    "action"
+    "notifications"
   ],
   "host_permissions": [
     "https://raw.githubusercontent.com/*"
@@ -26,7 +25,8 @@
     "128": "icons/icon128.png"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArNwEhYWHZw85aYD0Zb4LrDCTXfJRtRenzQlkKYVbQKZXnNPRZPWkzz8Nc0SboiLNw9TBrrwJqKzG+TbP9g38D1Uz0ud6PQqzkTRQcs7TgTPwVGBVlNXMlnahUl4kSFd1Fw1avrV5MXyVk0MwE6OZRVzuxdb8gtydOPFj071d9VfVU4aejfZYbjltkdiMrPs3AbCmEStmRtcc1IX3Nu9lvlEjcC0nPEVO6ew+Gd318LU3QNzXh5Ts7zPdP1gfMQ5+GmQKAErXNHHymf65srnROVTbBvtBzS+v6ca7s1YnVkxU+6SGUzIB7uL2onrRiTPmyNd3auN84VKUsASsWPGeTwIDAQAB"
 }

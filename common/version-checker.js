@@ -101,14 +101,15 @@ function showUpdateNotification(currentVersion, newVersion) {
     });
 }
 
-chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
-    if (notificationId === NOTIFICATION_ID && buttonIndex === 0) {
-        chrome.tabs.create({ url: 'https://github.com/rickoneeleven/ai-prompt-manager-extension/releases' });
-    }
-});
-
 export async function initVersionChecker() {
     console.log('Initializing version checker...');
+    
+    // Set up notification click handler
+    chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+        if (notificationId === NOTIFICATION_ID && buttonIndex === 0) {
+            chrome.tabs.create({ url: 'https://github.com/rickoneeleven/ai-prompt-manager-extension/releases' });
+        }
+    });
     
     const stored = await chrome.storage.local.get(['updateAvailable', 'latestVersion']);
     console.log('Stored update status:', stored);
