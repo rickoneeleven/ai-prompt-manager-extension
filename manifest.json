@@ -5,7 +5,9 @@
   "description": "Store, manage, and quickly use AI prompts.",
   "permissions": [
     "storage",
-    "clipboardWrite"
+    "clipboardWrite",
+    "notifications",
+    "action"
   ],
   "host_permissions": [
     "https://raw.githubusercontent.com/*"
