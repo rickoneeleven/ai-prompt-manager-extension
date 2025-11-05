@@ -26,6 +26,8 @@ const UIManager = (() => {
         addPromptButton: null,
         exportPromptsButton: null,
         importPromptsButton: null,
+        backupNowButton: null,
+        restoreBackupButton: null,
         importFileInput: null,
         // Prompt Input View
         selectedPromptTitle: null,
@@ -60,6 +62,8 @@ const UIManager = (() => {
         elements.addPromptButton = document.getElementById('add-prompt-btn');
         elements.exportPromptsButton = document.getElementById('export-prompts-btn');
         elements.importPromptsButton = document.getElementById('import-prompts-btn');
+        elements.backupNowButton = document.getElementById('backup-now-btn');
+        elements.restoreBackupButton = document.getElementById('restore-backup-btn');
         elements.importFileInput = document.getElementById('import-file-input');
 
         elements.selectedPromptTitle = document.getElementById('selected-prompt-title');

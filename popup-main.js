@@ -21,6 +21,8 @@ import {
     handleFileImport 
 } from './modules/prompt-operations.js';
 
+import { listBackups, backupToday, backupDailyIfMissing, restoreBackup } from './modules/backup-manager.js';
+
 document.addEventListener('DOMContentLoaded', async () => {
     if (typeof UIManager === 'undefined' || typeof UIManager.init !== 'function') {
         console.error('CRITICAL: UIManager.js is not loaded or UIManager is not defined. Aborting initialization.');
@@ -294,13 +296,57 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         if (elements.savePromptButton) elements.savePromptButton.addEventListener('click', async () => {
             currentEditingId = await handleSavePrompt(elements, currentEditingId, savePrompt, refreshPromptListAndDynamicButtons, UIManager);
+            try {
+                await backupToday(currentPrompts);
+                console.log('Local backup updated for today after save.');
+            } catch (err) {
+                console.warn('Failed to create local backup after save:', err);
+            }
         });
         
         if (elements.exportPromptsButton) elements.exportPromptsButton.addEventListener('click', () => handleExportPrompts(getAllPrompts));
         if (elements.importPromptsButton) elements.importPromptsButton.addEventListener('click', () => handleImportPrompts(elements));
         if (elements.importFileInput) elements.importFileInput.addEventListener('change', (event) => handleFileImport(event, getAllPrompts, savePrompt, refreshPromptListAndDynamicButtons, elements));
 
+        if (elements.backupNowButton) elements.backupNowButton.addEventListener('click', async () => {
+            try {
+                const res = await backupToday(currentPrompts);
+                alert(`Backup saved (${res.count} prompts).`);
+            } catch (e) {
+                console.error('Backup failed:', e);
+                alert(`Backup failed: ${e.message}`);
+            }
+        });
+
+        if (elements.restoreBackupButton) elements.restoreBackupButton.addEventListener('click', async () => {
+            try {
+                const backups = await listBackups();
+                if (!backups.length) { alert('No local backups found.'); return; }
+                const lines = backups.map((b, i) => {
+                    const date = b.key.replace('prompt_backup_', '');
+                    return `${i + 1}. ${date} — ${b.count} prompts`;
+                }).join('\n');
+                const input = prompt(`Select a backup to restore by number:\n\n${lines}`);
+                if (!input) return;
+                const index = parseInt(input, 10) - 1;
+                if (!(index >= 0 && index < backups.length)) { alert('Invalid selection.'); return; }
+                const chosen = backups[index];
+                const result = await restoreBackup(chosen.key);
+                if (result && result.cancelled) return;
+                await refreshPromptListAndDynamicButtons();
+                alert(`Restore complete. Saved: ${result.saved}, Failed: ${result.failed}`);
+            } catch (e) {
+                console.error('Restore failed:', e);
+                alert(`Restore failed: ${e.message}`);
+            }
+        });
+
         await refreshPromptListAndDynamicButtons();
+        try {
+            await backupDailyIfMissing(currentPrompts);
+        } catch (e) {
+            console.warn('Daily backup check failed:', e);
+        }
         UIManager.showView(UIManager.VIEWS.LIST);
         console.log("Initialization complete.");
     }
