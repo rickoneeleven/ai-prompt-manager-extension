@@ -341,6 +341,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
 
+        // Clean up any inconsistent storage left from past quota failures
+        if (typeof autoCleanupInconsistentStorage === 'function') {
+            try { await autoCleanupInconsistentStorage(); } catch (e) { console.warn('Auto-cleanup failed at init:', e); }
+        }
+
         await refreshPromptListAndDynamicButtons();
         try {
             await backupDailyIfMissing(currentPrompts);

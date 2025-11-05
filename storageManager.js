@@ -134,6 +134,65 @@ async function getAllPrompts() {
 
 
 /**
+ * Performs an automatic cleanup of inconsistent prompt data in chrome.storage.sync.
+ * - Removes metadata entries missing required chunks
+ * - Removes stray chunk entries without metadata
+ * - Removes malformed metadata (missing id or neither text nor chunkCount)
+ */
+async function autoCleanupInconsistentStorage() {
+    try {
+        const all = await chrome.storage.sync.get(null);
+        const keysToRemove = new Set();
+        const metaByKey = {};
+        const prefix = PROMPT_KEY_PREFIX;
+        const sep = CHUNK_KEY_SEPARATOR;
+
+        for (const [k, v] of Object.entries(all)) {
+            if (k.startsWith(prefix) && !k.includes(sep)) {
+                metaByKey[k] = v;
+            }
+        }
+
+        // Remove stray chunks with no metadata
+        for (const k of Object.keys(all)) {
+            if (k.includes(sep)) {
+                const baseKey = k.split(sep)[0];
+                if (!metaByKey[baseKey]) keysToRemove.add(k);
+            }
+        }
+
+        // Validate metadata entries
+        for (const [baseKey, meta] of Object.entries(metaByKey)) {
+            if (!meta || typeof meta !== 'object' || !meta.id) {
+                keysToRemove.add(baseKey);
+                continue;
+            }
+            if (typeof meta.chunkCount === 'number' && meta.chunkCount > 0) {
+                let missing = false;
+                for (let i = 0; i < meta.chunkCount; i++) {
+                    const ck = `${baseKey}${sep}${i}`;
+                    if (typeof all[ck] !== 'string') { missing = true; break; }
+                }
+                if (missing) {
+                    keysToRemove.add(baseKey);
+                    for (let i = 0; i < meta.chunkCount; i++) keysToRemove.add(`${baseKey}${sep}${i}`);
+                }
+            } else if (!Object.prototype.hasOwnProperty.call(meta, 'text')) {
+                // Neither chunkCount nor text
+                keysToRemove.add(baseKey);
+            }
+        }
+
+        if (keysToRemove.size > 0) {
+            await chrome.storage.sync.remove([...keysToRemove]);
+            logger.warn('StorageManager: Auto-cleanup removed inconsistent keys:', [...keysToRemove]);
+        }
+    } catch (e) {
+        logger.error('StorageManager: Auto-cleanup failed:', e.message, e.stack);
+    }
+}
+
+/**
  * Saves a single prompt, automatically chunking if text exceeds MAX_CHUNK_LENGTH.
  * Handles cleaning up old data/chunks if the prompt existed before.
  * @param {object} promptObject The prompt object to save {id, title, text}.
@@ -195,7 +254,7 @@ async function savePrompt(promptObject) {
             logger.log(`StorageManager: Prompt ID ${id} ("${title}") saved successfully as single item.`);
 
         } else {
-            // Save as chunked item
+            // Save as chunked item (chunks-first, metadata last to avoid stale metadata)
             logger.log(`StorageManager: Prompt ID ${id} text length (${text.length}) exceeds MAX_CHUNK_LENGTH (${MAX_CHUNK_LENGTH}). Chunking necessary.`);
             const chunks = [];
             for (let i = 0; i * MAX_CHUNK_LENGTH < text.length; i++) {
@@ -204,43 +263,52 @@ async function savePrompt(promptObject) {
             const chunkCount = chunks.length;
             logger.log(`StorageManager: Split prompt ID ${id} ("${title}") into ${chunkCount} chunks.`);
 
-            // Save metadata first (id, title, chunkCount)
-            const metadata = { id, title, chunkCount }; // Does NOT include 'text'
-            const metadataToSave = { [baseKey]: metadata };
-            const metadataByteLength = new TextEncoder().encode(JSON.stringify(metadata)).length;
-            if (metadataByteLength >= 8192 - baseKey.length) {
-                logger.error(`StorageManager: CRITICAL: Metadata for chunked prompt ID ${id} is too large (${metadataByteLength} bytes). Aborting save.`);
-                throw new Error(`Failed to save: Metadata for prompt "${title}" is too large. Try shortening the title. (Size: ${metadataByteLength} bytes)`);
-            }
-            logger.log(`StorageManager: Saving metadata for chunked prompt ID ${id}:`, metadata);
-            await chrome.storage.sync.set(metadataToSave);
-
-            // Save each chunk individually
+            const savedChunkKeys = [];
             for (let i = 0; i < chunkCount; i++) {
                 const chunkKey = `${baseKey}${CHUNK_KEY_SEPARATOR}${i}`;
-                const chunkData = chunks[i]; // This is just the string part
-                const chunkToSave = { [chunkKey]: chunkData }; // Store as { "prompt_xyz_chunk_0": "chunk text..." }
-
-                // Check byte length of the string chunk before attempting to save
+                const chunkData = chunks[i];
                 const chunkValueByteLength = new TextEncoder().encode(chunkData).length;
                 logger.log(`StorageManager: Preparing to save chunk ${i + 1}/${chunkCount} for prompt ID ${id}. Key: ${chunkKey}, Approx String Byte Size: ${chunkValueByteLength}`);
-
                 if (chunkValueByteLength >= 8192 - chunkKey.length) {
-                     logger.error(`StorageManager: CRITICAL: Calculated chunk ${i} for prompt ID ${id} ("${title}") is too large (${chunkValueByteLength} bytes for value, key: ${chunkKey.length} bytes) even after splitting by length! This can happen with text containing many multi-byte characters. Aborting save.`);
-                     // Attempting cleanup of already saved metadata is complex. User needs to be alerted.
-                     throw new Error(`Failed to save: A text chunk for "${title}" is too large (${chunkValueByteLength} bytes) even after splitting. The text may contain many multi-byte characters or there might be an issue with MAX_CHUNK_LENGTH. Try shortening the prompt text further.`);
+                    logger.error(`StorageManager: CRITICAL: Calculated chunk ${i} for prompt ID ${id} ("${title}") is too large (${chunkValueByteLength} bytes for value, key: ${chunkKey.length} bytes).`);
+                    throw new Error(`Failed to save: A text chunk for "${title}" is too large (${chunkValueByteLength} bytes). Try shortening the prompt text.`);
                 }
-
                 try {
-                    await chrome.storage.sync.set(chunkToSave);
+                    await chrome.storage.sync.set({ [chunkKey]: chunkData });
+                    savedChunkKeys.push(chunkKey);
                 } catch (chunkSaveError) {
                     logger.error(`StorageManager: Error saving chunk ${i} for prompt ID ${id}:`, chunkSaveError.message, chunkSaveError.stack);
-                    // If a chunk fails, the prompt is now in an inconsistent state in storage.
-                    // Automatic rollback is complex and risky. Inform user loudly.
-                    throw new Error(`Failed to save chunk ${i + 1} for prompt "${title}". Storage may be inconsistent. Error: ${chunkSaveError.message}`);
+                    // Cleanup any chunks saved so far
+                    if (savedChunkKeys.length) {
+                        try { await chrome.storage.sync.remove(savedChunkKeys); } catch (_) {}
+                    }
+                    throw new Error(`Failed to save chunk ${i + 1} for prompt "${title}". Error: ${chunkSaveError.message}`);
                 }
             }
-            logger.log(`StorageManager: All ${chunkCount} chunks saved successfully for prompt ID ${id} ("${title}").`);
+
+            // Now save metadata last
+            const metadata = { id, title, chunkCount };
+            const metadataByteLength = new TextEncoder().encode(JSON.stringify(metadata)).length;
+            if (metadataByteLength >= 8192 - baseKey.length) {
+                // Cleanup chunks before aborting
+                if (savedChunkKeys.length) {
+                    try { await chrome.storage.sync.remove(savedChunkKeys); } catch (_) {}
+                }
+                logger.error(`StorageManager: CRITICAL: Metadata for chunked prompt ID ${id} is too large (${metadataByteLength} bytes).`);
+                throw new Error(`Failed to save: Metadata for prompt "${title}" is too large. Try shortening the title.`);
+            }
+            try {
+                await chrome.storage.sync.set({ [baseKey]: metadata });
+            } catch (metaError) {
+                // Cleanup chunks if metadata fails to save (likely overall quota)
+                if (savedChunkKeys.length) {
+                    try { await chrome.storage.sync.remove(savedChunkKeys); } catch (_) {}
+                }
+                logger.error(`StorageManager: Error saving metadata for prompt ID ${id}:`, metaError.message, metaError.stack);
+                throw new Error(`Failed to save metadata for "${title}". Error: ${metaError.message}`);
+            }
+
+            logger.log(`StorageManager: All ${chunkCount} chunks and metadata saved successfully for prompt ID ${id} ("${title}").`);
         }
     } catch (error) {
         logger.error(`StorageManager: Error during save operation for prompt ID ${id} ("${title}"):`, error.message, error.stack);
