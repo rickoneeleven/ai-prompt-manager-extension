@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Prompt Manager",
-  "version": "25.11.05.1153",
+  "version": "25.11.05.1203",
   "description": "Store, manage, and quickly use AI prompts.",
   "permissions": [
     "storage",
